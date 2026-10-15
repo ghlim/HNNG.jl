@@ -100,8 +100,8 @@ package `compat` lower bound is 1.10 so the LTS also works.
 ## 4. Public API
 
 ```julia
-HNNGIndex(metric, dim::Int; T=Float32)      # VectorStore: d×n matrix of T
-HNNGIndex(metric, ::Type{E})                # ObjectStore{E}: Vector{E}
+HNNGIndex(metric, dim::Int; T=Float32, guard=nothing)  # VectorStore: d×n matrix of T
+HNNGIndex(metric, ::Type{E}; guard=nothing)            # ObjectStore{E}: Vector{E}
 
 add!(idx, x::AbstractVector)        -> Int            # one column (VectorStore)
 add!(idx, X::AbstractMatrix)        -> UnitRange{Int} # columns, in order
@@ -132,7 +132,9 @@ storage for deleted elements is kept (no compaction in this version).
 
 `knn` returns ids sorted by ascending distance, ties by ascending id. With
 fewer than `k` live elements it returns all of them. `knn` on an empty index
-returns two empty vectors. `k < 1` throws.
+returns two empty vectors. `k < 1` throws. `knn_batch` returns `k × nq`
+matrices (one column per query), padded with id `0` and distance `Inf` when
+fewer than `k` results exist.
 
 ### 4.2 Metrics and units
 
@@ -204,8 +206,12 @@ end
 All stored distances, radii and bounds are `Float64`, whatever `T` is. The
 Euclidean kernel for `Float32` data accumulates in `Float32` (as BLAS and the
 C++ do); the result is widened on store. Every prune comparison applies a
-relative guard of `1e-6` in favour of visiting, to absorb rounding in the
-triangle inequality. Exactness is defined relative to the package's own
+relative guard `γ` in favour of visiting, to absorb rounding in the triangle
+inequality: `LB = max(0, M − r − γ·(M + r))`, compared strictly. The default
+is `γ = max(1e-6, 4·d·eps(T))` for a VectorStore of dimension `d` and element
+type `T` (Float32 at `d = 784` gives about `1.9e-4`, which covers worst-case
+accumulation rounding) and `1e-6` for an ObjectStore; the `guard` keyword of
+`HNNGIndex` overrides it. Exactness is defined relative to the package's own
 kernel; the brute-force oracle in the tests uses the same kernel.
 
 Memory: level 0 holds every element; upper levels are sparse and indexed by
@@ -236,10 +242,16 @@ For every level `l` with population `P_l`:
    with one cluster is the top. An empty index has no levels.
 
 Because every tie is broken canonically, the hierarchy at rest is a pure
-function of the live point set (up to id relabelling). Streaming inserts in
-any order, deletes followed by re-inserts, and the bulk loader must produce
-the same structure; §10 tests this. Order independence is new relative to
-both earlier implementations: the ROS code breaks ties by key or member order
+function of the live set of `(id, point)` pairs and is invariant under any
+order-preserving relabelling of ids. It is not invariant under arbitrary
+insertion orders: in a two-member mutual pair both members have one inlink
+and the same distance sum, so the smallest id decides the representative.
+What must hold, and §10 tests: the level-0 graph is identical for every
+insertion order; the whole hierarchy is identical, up to relabelling, for
+streaming versus bulk loading, for a stream with interleaved insert and
+delete noise, and for delete-everything-then-reinsert in the same relative
+order. Determinism given the id order is new relative to both earlier
+implementations: the ROS code breaks ties by key or member order
 with an unstable sort, its rewire sweep can miss candidates and it never
 refreshes ancestor radii (review D4, D8, D12).
 
@@ -305,12 +317,16 @@ Every evaluated level-`l` element is recorded. Then:
    and the clusters that the re-linked inlinkers now point into (pieces may
    merge into them). Refresh ancestors, return the delta.
 
-Reachability contract for implementers: while level `l` is being processed,
-every element at levels `≥ l` is reachable from the top by descent, and every
-cluster's `radius` and `maxout` are valid for its reachable subtree. Clusters
-at levels `< l` whose new representative has not yet been linked are
-"floating" and are reattached by the `link!` of that representative. `verify`
-is only meaningful at rest.
+Reachability contract for implementers: a cluster is *floating* when none of
+its members is present at the level above. A split inside the current level
+step creates one at level `l` itself (the piece without the old
+representative), and repairs at lower levels create them below. Every descent
+at level `l` is therefore seeded with the top-level clusters plus every
+floating cluster at level `l`, tracked per level and cleared when the
+cluster's representative is linked above. With that seeding, every element at
+levels `≥ l` is reachable while level `l` is processed, and every cluster's
+`radius` and `maxout` are valid for its reachable subtree. `verify` is only
+meaningful at rest.
 
 ### 6.4 `add!`, `delete!`, level growth
 
@@ -375,8 +391,9 @@ union-find for components, representative election, bounds. Every argmin
 candidate within `1e-5` relative distance of the tile minimum is re-ranked
 with the direct kernel so that outlinks agree with the streaming path on
 tie-free data. The level-`(l+1)` population is the set of representatives and
-the same procedure repeats until one cluster remains. `bulk_add!` on a
-non-empty index throws.
+the same procedure repeats until one cluster remains. `bulk_add!` requires a
+fresh index (no id ever assigned; a drained index does not qualify) and
+throws otherwise.
 
 ## 7. Navigation API (no distance evaluation)
 
@@ -456,9 +473,11 @@ seeds.
   in every test that mutates an index. `verify` checks §6.1 items 1–7, with
   the 1-NN test done by brute force over each level's population and the
   bounds recomputed from scratch.
-- **Order independence** (`order.jl`): five random insertion orders and the
-  bulk loader produce identical hierarchies (compared after mapping ids back
-  to point indices) on tie-free data.
+- **Order and history** (`order.jl`): five random insertion orders give the
+  identical level-0 graph (as point pairs); the full hierarchy is identical,
+  after mapping ids back to point indices, for streaming versus `bulk_add!`,
+  for a stream with interleaved inserts and deletes of noise points, and for
+  delete-everything-then-reinsert in the same relative order.
 - **Updates** (`updates.jl`): random interleaved inserts and deletes with
   the oracle and `verify` after each step; deleting a representative; delete
   everything and re-insert gives the same structure; `length`, `stats`.
