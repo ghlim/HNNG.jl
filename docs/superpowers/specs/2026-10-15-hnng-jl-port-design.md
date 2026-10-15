@@ -512,11 +512,13 @@ number of live elements. `env.txt` records Julia version, the
   uniform in `[-10, 10]^d`, unit isotropic standard deviation, matching the
   ann-benchmarks `random-xs` generator). Columns: fraction evaluated ρ, QPS
   for hNNG, KD-tree, ball tree and brute force, build time, number of levels.
-- **Exp.3** (`exp3.jl`): Gaussian data. Table configurations are the TKDE
-  rows `(n, d) ∈ {(8000, 16), (32000, 16), (32000, 128)}`; the figure sweeps
-  `n ∈ {1k, 2k, 5k, 10k, 20k, 60k}` at `d = 16`. After the build, 200 inserts
-  of new points, then 200 deletes of random live ids; the table reports the
-  median per-operation latency of three runs. Per operation: latency, distance
+- **Exp.3** (`exp3.jl`): Gaussian data on the TKDE grid `n ∈ {8000, 16000,
+  32000} × d ∈ {16, 64, 128}`. The table reports the TKDE rows `(8000, 16)`,
+  `(32000, 16)`, `(32000, 128)`; the figure has three panels (one per `d`)
+  with `n` on a log axis and three lines (full rebuild, insert, delete), as
+  the TKDE `ops_comparison.pdf`. After the build, 200 inserts of new points,
+  then 200 deletes of random live ids; the table reports the median
+  per-operation latency of three runs; the bulk rebuild time is recorded too. Per operation: latency, distance
   evaluations, elements rewired at level 0, highest level touched. After every
   operation 20 random queries are checked against brute force (an assertion,
   not timed). Baselines: full hNNG rebuild time per operation (the TKDE
@@ -533,6 +535,8 @@ number of live elements. `env.txt` records Julia version, the
   `
 ewcommand` per number quoted in the manuscript prose (the ρ(d) values
   at `d = 2, 8, 16, 32`, the rewire counts, the recall–QPS headline).
+  The three table files hold only the `tabular` environment; the manuscript
+  keeps its own `table` float, caption and label around each `\input`.
   `plots.jl` writes `bench/results/fig/recall_qps.pdf`,
   `dist_eval_vs_dim.pdf`, `qps_vs_dim.pdf` and `ops_comparison.pdf` with
   CairoMakie, the four TKDE benchmark figures. The manuscript inputs these
