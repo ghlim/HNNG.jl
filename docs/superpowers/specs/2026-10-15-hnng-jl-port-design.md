@@ -209,7 +209,7 @@ C++ do); the result is widened on store. Every prune comparison applies a
 relative guard `γ` in favour of visiting, to absorb rounding in the triangle
 inequality: `LB = max(0, M − r − γ·(M + r))`, compared strictly. The default
 is `γ = max(1e-6, 4·d·eps(T))` for a VectorStore of dimension `d` and element
-type `T` (Float32 at `d = 784` gives about `1.9e-4`, which covers worst-case
+type `T` (Float32 at `d = 784` gives about `3.7e-4`, which covers worst-case
 accumulation rounding) and `1e-6` for an ObjectStore; the `guard` keyword of
 `HNNGIndex` overrides it. Exactness is defined relative to the package's own
 kernel; the brute-force oracle in the tests uses the same kernel.
