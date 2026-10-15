@@ -505,24 +505,37 @@ number of live elements. `env.txt` records Julia version, the
   sweep over `{10, 20, 40, 80, 160, 320, 640}`; SimilaritySearch rows when
   the package loads. Columns: build time, QPS, both recalls, fraction
   evaluated, levels and cluster counts for hNNG.
-- **Exp.2** (`exp2.jl`): synthetic `d ∈ {2, 4, 8, 16, 32, 64, 128}`,
-  `n = 10,000` plus 1,000 queries, two geometries: uniform in `[0, 1]^d` and
-  100-centre blobs (centres uniform in `[-10, 10]^d`, unit isotropic standard
-  deviation, matching the ann-benchmarks `random-xs` generator). Columns:
-  fraction evaluated, QPS for hNNG, KD-tree, ball tree and brute force, build
-  time, number of levels.
-- **Exp.3** (`exp3.jl`): blobs with `d = 20`, `n ∈ {1k, 2k, 5k, 10k, 20k,
-  60k}`. After the build, 200 inserts of new points, then 200 deletes of
-  random live ids. Per operation: latency, distance evaluations, elements
-  rewired at level 0, highest level touched. After every operation 20 random
-  queries are checked against brute force (an assertion, not timed).
-  Baselines: HNSW.jl `add_to_graph!` latency (delete reported as "mark only"),
-  KD-tree and ball tree full rebuild time, brute force (no update cost).
-- Outputs: `bench/results/{exp1,exp1b,exp2,exp3}.csv`, `env.txt`;
-  `tables.jl` writes `bench/results/tex/tab_*.tex` and
-  `bench/results/tex/macros.tex` (one `\newcommand` per number quoted in
-  the manuscript prose, such as the per-dimension evaluated fractions); `plots.jl` writes
-  `bench/results/fig/*.pdf` with CairoMakie. The manuscript inputs these
+- **Exp.2** (`exp2.jl`): synthetic `d ∈ {2, 4, 8, 16, 32, 64, 128}` with
+  1,000 queries, two geometries: i.i.d. Gaussian `N(0, I_d)` with
+  `n = 5,000` (the TKDE setting, so the manuscript's ρ(d) sentence keeps its
+  form with Julia numbers) and 100-centre blobs with `n = 10,000` (centres
+  uniform in `[-10, 10]^d`, unit isotropic standard deviation, matching the
+  ann-benchmarks `random-xs` generator). Columns: fraction evaluated ρ, QPS
+  for hNNG, KD-tree, ball tree and brute force, build time, number of levels.
+- **Exp.3** (`exp3.jl`): Gaussian data. Table configurations are the TKDE
+  rows `(n, d) ∈ {(8000, 16), (32000, 16), (32000, 128)}`; the figure sweeps
+  `n ∈ {1k, 2k, 5k, 10k, 20k, 60k}` at `d = 16`. After the build, 200 inserts
+  of new points, then 200 deletes of random live ids; the table reports the
+  median per-operation latency of three runs. Per operation: latency, distance
+  evaluations, elements rewired at level 0, highest level touched. After every
+  operation 20 random queries are checked against brute force (an assertion,
+  not timed). Baselines: full hNNG rebuild time per operation (the TKDE
+  "rebuild" column and speedup), HNSW.jl `add_to_graph!` latency (delete
+  reported as "mark only"), KD-tree and ball tree full rebuild time, brute
+  force (no update cost).
+- Outputs: `bench/results/{exp1,exp1b,exp2,exp3}.csv`, `env.txt`.
+  `tables.jl` writes `bench/results/tex/tab_annbench.tex`,
+  `tab_fashion.tex` and `tab_ops.tex` in the TKDE layouts (columns
+  `Method & Recall & QPS & Build (s)` for the first two, with hNNG
+  incremental, hNNG bulk, brute force, KD-tree, ball tree, HNSW at maximum
+  recall and HNSW at its sweet spot as rows; `n (d) & insert/op & delete/op &
+  rebuild/op (speedup)` for the third), plus `macros.tex` with one
+  `
+ewcommand` per number quoted in the manuscript prose (the ρ(d) values
+  at `d = 2, 8, 16, 32`, the rewire counts, the recall–QPS headline).
+  `plots.jl` writes `bench/results/fig/recall_qps.pdf`,
+  `dist_eval_vs_dim.pdf`, `qps_vs_dim.pdf` and `ops_comparison.pdf` with
+  CairoMakie, the four TKDE benchmark figures. The manuscript inputs these
   files and types no number by hand. `run_all.jl` runs everything in order.
 
 Throughput parity with the C++ numbers in the TKDE draft is not a goal and
