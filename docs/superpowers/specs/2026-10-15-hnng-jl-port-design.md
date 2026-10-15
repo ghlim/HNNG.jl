@@ -12,13 +12,18 @@ submission reports. It ports the C++ reference at `/home/coral/working/hnng`
 **identical algorithm semantics** (approach B agreed in brainstorming:
 Julia style and data layout, same exact structure and same exact results).
 
+The 2015 ROS implementation (`archives/race/raceua/race_view_clustering`) was
+reviewed against this spec on 2026-10-16; the review with line citations is
+`docs/notes/2026-10-16-ros-review.md` and its findings are folded in below.
+
 The package must make three merits of hNNG concrete and testable, because the
 manuscript builds its story on them:
 
 1. **Non-fixed-dimension elements and arbitrary metrics.** An element can be
    any Julia object (for example a set of SIFT descriptors whose count varies
-   per object) under any user distance. The algorithm only ever calls
-   `distance(idx, a, b)`.
+   per object; in the 2015 ROS system an element was one object view, a
+   variable-size set of 153-value spin images) under any user distance. The
+   algorithm only ever calls `distance(idx, a, b)`.
 2. **Online and incremental learning.** Insert and delete are first-class and
    exact; the hierarchy is never rebuilt from scratch. Updates touch the
    root-to-leaf path and the affected clusters only (memory rule
@@ -147,8 +152,14 @@ returns two empty vectors. `k < 1` throws.
   `UserMetric(f; is_metric=false)`.
 - Non-metric distances give an **exact but unpruned** index: every lower
   bound is 0, so inserts and queries evaluate every element at the levels
-  they visit. The docstring states this and states what breaks if a user
-  declares a non-metric as a metric (missed neighbours, no error raised).
+  they visit. Declaring `is_metric=true` for a distance that is not a metric
+  is the opt-in heuristic mode: pruning runs and results may miss neighbours,
+  with no error raised. That is how the 2015 ROS system ran (it pruned with a
+  non-metric view distance), and the docstring says so. No separate mode
+  exists.
+- Labels (object names) are not stored in the index. The caller keeps a
+  `labels` vector indexed by id; recognition of a query view is
+  `labels[first(first(knn(idx, q, 1)))]`, shown in the README.
 
 ### 4.3 `stats(idx)`
 
@@ -227,7 +238,10 @@ For every level `l` with population `P_l`:
 Because every tie is broken canonically, the hierarchy at rest is a pure
 function of the live point set (up to id relabelling). Streaming inserts in
 any order, deletes followed by re-inserts, and the bulk loader must produce
-the same structure; §10 tests this.
+the same structure; §10 tests this. Order independence is new relative to
+both earlier implementations: the ROS code breaks ties by key or member order
+with an unstable sort, its rewire sweep can miss candidates and it never
+refreshes ancestor radii (review D4, D8, D12).
 
 ### 6.2 Bounds
 
@@ -344,8 +358,11 @@ One exact engine: best-first branch-and-bound.
 - Output sorted by `(distance, id)`.
 
 `HNNG.knn_levelsync(idx, q, k)` keeps the level-synchronous descent of the
-2015 algorithm (prune with the same strict rule) unexported, as a second
-oracle for the tests only.
+2015 algorithm unexported, as a second oracle for the tests only, with the
+corrected prune rule: the ROS `getNNElementwithPH` has the keep/prune sign
+flipped (`view_clustering_utils.cpp:2260`), the correct non-strict form is in
+`getNNClusterswithRadius` (line 2338), and the port uses the strict form with
+the guard in both engines.
 
 The C++ budget fallback (`max(64, n/32)` brute-force scan) and its latches
 are not ported.
@@ -373,8 +390,17 @@ members(idx, c); representative(idx, c); radius(idx, c)
 parent(idx, c)                   # cluster at level+1 containing rep(c), nothing at the top
 children(idx, c)                 # child clusters of the members
 path_to_root(idx, id)            # Vector of cluster handles, level 0 up
+leaves(idx, c)                   # level-0 ids under c (the ROS getLeafElementswithCluster)
 nlevels(idx); root(idx)          # root cluster handle
+newick(idx; labels=nothing)      # Newick string of the hierarchy with radii as branch
+                                 # lengths and labels[id] as leaf names (ROS eTree export)
 ```
+
+The README shows two application recipes built on these calls and an external
+`labels` vector: recognition by the label of the 1-NN, and the maximal
+single-label subtrees of an object (the ROS `ObjectRepresentation`), found by
+walking `children` and `leaves` without a distance evaluation. Neither is a
+package function.
 
 Package extension `HNNGGraphsExt` (loaded when `Graphs` is present):
 `Graphs.SimpleDiGraph`-compatible export `level_graph(idx, l) ->
@@ -419,9 +445,13 @@ seeds.
 - **Brute-force oracle** (`oracle.jl`): `knn` equals exhaustive search for
   Euclidean, squared Euclidean and cosine on random Float32 and Float64 data
   with `d ∈ {2, 8, 32}`, `n ∈ {1, 2, 50, 2000}`, `k ∈ {1, 10, n+5}`; also
-  for an ObjectStore of variable-size descriptor sets under a Hausdorff
-  `UserMetric(is_metric=true)` and under a non-metric mean-closest-descriptor
-  distance (`is_metric=false`). Best-first and level-sync oracle agree.
+  for an ObjectStore of variable-size descriptor sets (`d×m` matrices with
+  `m` varying per element) under a Hausdorff `UserMetric(is_metric=true)`
+  with Euclidean point distance, and under the 2015 ROS view distance
+  `max(mean_i min_j ‖a_i − b_j‖², mean_j min_i ‖a_i − b_j‖²)`
+  (`race_feature_extraction/src/spin_image.cpp:252–312`,
+  `view_clustering_utils.cpp:1957–1969`), which is not a metric and runs
+  with `is_metric=false`. Best-first and level-sync oracle agree.
 - **Invariants** (`invariants.jl`): `verify` after every `add!` and `delete!`
   in every test that mutates an index. `verify` checks §6.1 items 1–7, with
   the 1-NN test done by brute force over each level's population and the
@@ -489,7 +519,9 @@ number of live elements. `env.txt` records Julia version, the
   Baselines: HNSW.jl `add_to_graph!` latency (delete reported as "mark only"),
   KD-tree and ball tree full rebuild time, brute force (no update cost).
 - Outputs: `bench/results/{exp1,exp1b,exp2,exp3}.csv`, `env.txt`;
-  `tables.jl` writes `bench/results/tex/tab_*.tex`; `plots.jl` writes
+  `tables.jl` writes `bench/results/tex/tab_*.tex` and
+  `bench/results/tex/macros.tex` (one `\newcommand` per number quoted in
+  the manuscript prose, such as the per-dimension evaluated fractions); `plots.jl` writes
   `bench/results/fig/*.pdf` with CairoMakie. The manuscript inputs these
   files and types no number by hand. `run_all.jl` runs everything in order.
 
@@ -510,6 +542,17 @@ is not promised; the manuscript reports the Julia numbers as such.
 
 The first two change tie resolution and the hierarchy shape, not the set of
 distances a query returns; the parity test is gated accordingly.
+
+Against the 2015 ROS implementation (review D1–D23): it agrees with the C++
+on the representative rule (raw units, then member order) and on the
+non-strict level-sync prune; it already updated upper levels level by level
+with the same insert routine, which this spec follows and the C++ replaced by
+brute force over the representative set; its rewire bound is the pre-fe7641f
+level-local form; it never refreshed ancestor radii; it dropped one level
+only when the hierarchy shrank; it had no deletion of a view; its recognition
+service returned the label of the single nearest view with the flipped sign.
+The manuscript's online-delete claim therefore rests on the C++ and Julia
+implementations, not on the 2015 system.
 
 ## 13. Risks and open items
 
