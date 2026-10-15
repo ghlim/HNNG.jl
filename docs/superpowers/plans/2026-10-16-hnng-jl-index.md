@@ -16,7 +16,7 @@
 - Dependencies exactly: `Distances`, `LinearAlgebra`, `DataStructures`, `Serialization`. Weak dependency `Graphs` (extension `HNNGGraphsExt`, which also uses the `SparseArrays` stdlib). Test dependencies: `Test`, `StableRNGs`, `Graphs`, `HDF5` (slow tests only), `JSON3` (fixtures), plus the stdlibs `Base64`, `Random`, `SparseArrays`.
 - Ids are `Int`, assigned 1, 2, 3, … in `add!` order and never reused; a deleted id is a tombstone; `knn` returns ids sorted by ascending distance, ties by ascending id, in **the metric's own units**.
 - "All stored distances, radii and bounds are `Float64`, whatever `T` is." The Euclidean kernel for `Float32` data accumulates in `Float32` and widens the result.
-- "Every prune comparison applies a relative guard of `1e-6` in favour of visiting." Exactness is relative to the package's own kernel; the test oracle uses the same kernel.
+- Prune guard (amended spec): `γ = max(1e-6, 4·d·eps(T))` for a VectorStore of dimension `d` and element type `T`, `1e-6` for an ObjectStore; stored on the index as `idx.guard`; overridable with the `guard` keyword on both `HNNGIndex` constructors (`guard=nothing` means the default). Every prune uses `LB = max(0, M − r − γ·(M + r))` compared strictly, in favour of visiting. Exactness is relative to the package's own kernel; the test oracle uses the same kernel.
 - Canonical ties everywhere: nearest neighbour by `(distance, id)`; representative by most inlinks, then smallest sum of the inlinkers' outlink distances (metric units), then smallest id.
 - Exceptions: `ArgumentError` with the offending value for exactly the cases of spec §9; "The package never silently drops an operation."
 - `nevals` counts every distance evaluation of `add!`, `delete!`, `bulk_add!` and the serial `knn` path; it is a plain always-on `Int`; `knn_batch(...; threads=true)` does not update it.
@@ -35,12 +35,12 @@
 
 ## Spec assumptions
 
-The spec was not changed. Where it is silent or self-contradictory, this plan assumes:
+Assumptions 1, 2, 7 and 8, and the dimension-aware guard of assumption 4, have been adopted by the amended spec (commit `bf09a5f`); the others are this plan's reading where the spec is silent:
 
 1. **Order independence (spec §6.1, §10).** The third representative tiebreak (smallest id) fires on every two-member mutual pair, because both members have one inlink and the same sum (the distance is symmetric). So the hierarchy is a pure function of the live set of `(id, point)` pairs, invariant under any order-preserving relabelling of ids, but not under arbitrary insertion orders. `test/order.jl` therefore checks: five random insertion orders give the identical level-0 graph and identical level-0 member sets (as point sets); the full hierarchy is identical for (a) streaming versus `bulk_add!` in the same column order, (b) a stream with interleaved noise inserts and deletes versus a clean stream, (c) delete-and-re-insert versus a fresh build with the same relative id order.
 2. **Reachability during one `propagate!` step (spec §6.3 "Reachability contract").** It is not true that every element at levels ≥ `l` is reachable from the top while level `l` is processed: an earlier `link!`/`unlink!` of the same step can split a level-`l` cluster, and the piece without the old representative has no member at level `l+1`. Every descent at level `l` is therefore seeded with the top-level clusters plus the level-`l` clusters repaired earlier in the same step that have no member present at level `l+1` (the `floating` list).
 3. **A member without a child cluster (spec §6.2).** During a delete cascade an element is present at level `L` but already absent at level `L-1`. Its radius term is `repdist` alone and it contributes nothing to `maxout[t]` for `t < L`. At rest this never happens.
-4. **Guard form.** `LB(C) = max(0, M(q, rep) - radius - 1e-6 * (M(q, rep) + radius))`; every prune compares this guarded `LB` strictly (`>`). Non-metric indexes never prune (`LB = 0` and the comparison is gated on `is_metric`).
+4. **Guard form.** `LB(C) = max(0, M(q, rep) - radius - γ * (M(q, rep) + radius))` with `γ = idx.guard` (default `max(1e-6, 4·d·eps(T))` for a VectorStore, `1e-6` for an ObjectStore, `guard=` keyword overrides); every prune compares this guarded `LB` strictly (`>`). Non-metric indexes never prune (`LB = 0` and the comparison is gated on `is_metric`).
 5. **Child bounds inside `link!`/`unlink!`.** A child cluster's `LB` uses `M(e, rep(child))`, not `M(e, m)`: the two differ during an update. Search at rest uses the same formula; there `rep(child(m)) == m`.
 6. **Canonical sums.** The inlinker-distance sum of the representative rule is summed in ascending value order, so it does not depend on ids or history. `inlinks[x]` and `members` are kept sorted by id.
 7. **`knn_batch` shape.** `ids` and `dists` are `k × nq` (one column per query); missing results are padded with id `0` and distance `Inf`.
@@ -61,7 +61,7 @@ The spec was not changed. Where it is silent or self-contradictory, this plan as
 - **Cluster slots:** a freed slot gets `rep = 0` and goes on `Level.free`; new clusters pop from `free` (last in, first out) or append. Cluster indices are valid only between mutations.
 - **Components:** breadth-first search over outlinks and inlinks (`_component`), in the local repair and in the bulk loader; it yields the same components as the union-find of spec §6.6.
 - **Descent frontier order inside `link!`/`unlink!`:** min-heap on `(LB, level, cluster index)`; the skip test runs at push and again at pop; level-`l` clusters reached twice in one pass are expanded once (the representative's `mark`).
-- **Internal names used across tasks:** `_point`, `_append!`, `_ntotal`, `dim`, `_grow!`, `_begin!`, `_euclid`, `_rawdist`, `_to_user`, `_prepare`, `_normalize!`, `_d`, `_mdist`, `_flush!`, `_better`, `_insum`, `_elect`, `_component`, `_insert_sorted!`, `_remove_sorted!`, `_scan_level`, `_nn_search`, `_lb`, `_skip`, `_push_cluster!`, `_repdist`, `_bounds!`, `_new_slot!`, `_free_slot!`, `_refresh_up!`, `_repair!`, `link!`, `unlink!`, `_compose!`, `propagate!`, `_insert!`, `_knn!`, `_offer!`, `_sorted_results`, `_check_live`, `_check_level`, `_cl`, `_verify_level`, `_verify_top`, `_fresh_bounds`, `_rep_mask`, `_fail`, `_components`, `_allpairs_nn`, `_allpairs_nn_direct`, `_allpairs_nn_blas`, `last_update_stats`. Constants: `GUARD = 1e-6`, `FWD`, `REV`, `BULK_TILE = 512`, `RERANK = 1e-5`, `FORMAT`, `FORMAT_VERSION`.
+- **Internal names used across tasks:** `_point`, `_append!`, `_ntotal`, `dim`, `_default_guard`, `_grow!`, `_begin!`, `_euclid`, `_rawdist`, `_to_user`, `_prepare`, `_normalize!`, `_d`, `_mdist`, `_flush!`, `_better`, `_insum`, `_elect`, `_component`, `_insert_sorted!`, `_remove_sorted!`, `_scan_level`, `_nn_search`, `_lb`, `_skip`, `_push_cluster!`, `_repdist`, `_bounds!`, `_new_slot!`, `_free_slot!`, `_refresh_up!`, `_repair!`, `link!`, `unlink!`, `_compose!`, `propagate!`, `_insert!`, `_knn!`, `_offer!`, `_sorted_results`, `_check_live`, `_check_level`, `_cl`, `_verify_level`, `_verify_top`, `_fresh_bounds`, `_rep_mask`, `_fail`, `_components`, `_allpairs_nn`, `_allpairs_nn_direct`, `_allpairs_nn_blas`, `last_update_stats`. Constants: `GUARD = 1e-6`, `FWD`, `REV`, `BULK_TILE = 512`, `RERANK = 1e-5`, `FORMAT`, `FORMAT_VERSION`.
 
 ## File structure
 
@@ -281,8 +281,9 @@ git commit -m "build: package skeleton, test target and Graphs extension stub" -
   - `mutable struct Cluster; rep::Int; members::Vector{Int}; repdist::Vector{Float64}; radius::Float64; maxout::Vector{Float64}; end`, `_dead_cluster() -> Cluster`
   - `mutable struct Level` with fields `outlink, outdist, inlinks, present, cluster_of, clusters, free, npop, nclusters`; `Level(n::Int)`; `_grow!(lv::Level, n::Int)`
   - `mutable struct DistMemo` with fields `val, seen, mark, epoch, nevals, front, res`; `DistMemo()`; `_begin!(m::DistMemo, n::Int) -> DistMemo`
-  - `mutable struct HNNGIndex{S,M}` with fields `store, metric, is_metric, alive, levels, nevals, memo, last_rewired, last_top`
-  - `HNNGIndex(metric, dim::Integer; T=Float32)`, `HNNGIndex(metric, ::Type{E})`
+  - `mutable struct HNNGIndex{S,M}` with fields `store, metric, is_metric, guard, alive, levels, nevals, memo, last_rewired, last_top`
+  - `HNNGIndex(metric, dim::Integer; T=Float32, guard=nothing)`, `HNNGIndex(metric, ::Type{E}; guard=nothing)`
+  - `const GUARD = 1e-6`, `_default_guard(::Type{T}, d::Int) -> Float64` (`max(GUARD, 4·d·eps(T))`)
   - `_ntotal(idx) -> Int`, `Base.length(idx)` (live), `nlevels(idx)`, `is_metric(idx)`
   - `struct UserMetric{F}; f::F; is_metric::Bool; end`, `UserMetric(f; is_metric=false)`
   - `const EuclidFamily = Union{Euclidean,SqEuclidean,CosineDist}`, `_wrap_metric(m)`, `_is_metric_for(store, metric) -> Bool`
@@ -315,6 +316,15 @@ using Distances: Cityblock, CorrDist
     @test HNNG._point(o.store, 1) == 7
     @test_throws ArgumentError HNNGIndex(Euclidean(), 0)
     @test sprint(show, idx) == "HNNGIndex(Euclidean, 0 live, 0 levels)"
+end
+
+@testset "prune guard" begin
+    @test HNNGIndex(Euclidean(), 784).guard == 4 * 784 * eps(Float32)
+    @test HNNGIndex(Euclidean(), 784; guard=nothing).guard == 4 * 784 * eps(Float32)
+    @test HNNGIndex(Euclidean(), 2; T=Float64).guard == 1e-6
+    @test HNNGIndex(Euclidean(), 3; guard=1e-3).guard == 1e-3
+    @test HNNGIndex((a, b) -> abs(a - b), Float64).guard == 1e-6
+    @test HNNGIndex((a, b) -> abs(a - b), Float64; guard=1e-3).guard == 1e-3
 end
 
 @testset "is_metric rules" begin
@@ -504,12 +514,15 @@ An exact, parameter-free hierarchical nearest-neighbour-graph index. `metric` is
 Distances.jl `PreMetric`, a `UserMetric`, or any callable `f(a, b) -> Real` (taken as
 `UserMetric(f; is_metric=false)`). `Euclidean`, `SqEuclidean` and `CosineDist` on a
 VectorStore use the specialised kernel and work in Euclidean units internally;
-results are always in the metric's own units.
+results are always in the metric's own units. `guard` is the relative prune guard
+γ: `nothing` gives `max(1e-6, 4·d·eps(T))` for a VectorStore and `1e-6` for an
+ObjectStore.
 """
 mutable struct HNNGIndex{S<:Union{VectorStore,ObjectStore},M}
     store::S
     metric::M
     is_metric::Bool
+    guard::Float64              # relative prune guard γ (spec §5)
     alive::BitVector
     levels::Vector{Level}       # levels[l+1] is level l
     nevals::Int
@@ -518,17 +531,25 @@ mutable struct HNNGIndex{S<:Union{VectorStore,ObjectStore},M}
     last_top::Int
 end
 
-function HNNGIndex(metric, dim::Integer; T::Type{<:AbstractFloat}=Float32)
+const GUARD = 1e-6
+
+"""Default relative prune guard of a VectorStore index: `max(1e-6, 4·d·eps(T))`."""
+_default_guard(::Type{T}, d::Int) where {T<:AbstractFloat} = max(GUARD, 4 * d * Float64(eps(T)))
+
+function HNNGIndex(metric, dim::Integer; T::Type{<:AbstractFloat}=Float32,
+                   guard::Union{Nothing,Real}=nothing)
     dim >= 1 || throw(ArgumentError("dim must be at least 1, got $dim"))
     m = _wrap_metric(metric)
     s = VectorStore{T}(Int(dim))
-    HNNGIndex(s, m, _is_metric_for(s, m), falses(0), Level[], 0, DistMemo(), 0, 0)
+    g = guard === nothing ? _default_guard(T, Int(dim)) : Float64(guard)
+    HNNGIndex(s, m, _is_metric_for(s, m), g, falses(0), Level[], 0, DistMemo(), 0, 0)
 end
 
-function HNNGIndex(metric, ::Type{E}) where {E}
+function HNNGIndex(metric, ::Type{E}; guard::Union{Nothing,Real}=nothing) where {E}
     m = _wrap_metric(metric)
     s = ObjectStore{E}()
-    HNNGIndex(s, m, _is_metric_for(s, m), falses(0), Level[], 0, DistMemo(), 0, 0)
+    g = guard === nothing ? GUARD : Float64(guard)
+    HNNGIndex(s, m, _is_metric_for(s, m), g, falses(0), Level[], 0, DistMemo(), 0, 0)
 end
 
 _ntotal(idx::HNNGIndex) = length(idx.store)
@@ -596,7 +617,7 @@ end # module
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `julia --project=. -e 'using Test, HNNG; include("test/metrics.jl")'`
-Expected: `stores and index construction`, `is_metric rules` and `distance memo epochs` all pass.
+Expected: `stores and index construction`, `prune guard`, `is_metric rules` and `distance memo epochs` all pass.
 Run: `julia --project=. -e 'using Pkg; Pkg.test()'`
 Expected: `Testing HNNG tests passed`.
 
@@ -1892,8 +1913,8 @@ Replace the scan inside `_nn_search` by the best-first pruned descent of spec §
 **Interfaces:**
 - Consumes: Task 5 `_scan_level` (kept as the test oracle), `Cluster.maxout`, `DistMemo.front`, `DistMemo.mark`.
 - Produces:
-  - `const GUARD = 1e-6`, `const FWD = Base.Order.Forward`, `const REV = Base.Order.Reverse`
-  - `_lb(dr::Float64, r::Float64) -> Float64` — `max(0, dr - r - GUARD*(dr + r))`
+  - `const FWD = Base.Order.Forward`, `const REV = Base.Order.Reverse`
+  - `_lb(dr::Float64, r::Float64, g::Float64) -> Float64` — `max(0, dr - r - g*(dr + r))`; every caller passes `idx.guard` (Task 2)
   - `_skip(idx, lb, nnd, c::Cluster, l::Int, record::Bool) -> Bool`
   - `_push_cluster!(memo, idx, q, L::Int, ci::Int, nnd::Float64, l::Int, record::Bool)`
   - `_nn_search` (same signature and contract as Task 5)
@@ -1946,18 +1967,18 @@ Add `using DataStructures: heappush!, heappop!` to the `using` lines of `src/HNN
 
 Append to `src/insert.jl`:
 ```julia
-const GUARD = 1e-6
 const FWD = Base.Order.Forward
 const REV = Base.Order.Reverse
 
 """
-    _lb(dr, r) -> Float64
+    _lb(dr, r, g) -> Float64
 
 Lower bound on the distance from the pass query to every element reachable from a
 cluster whose representative is `dr` away and whose radius is `r`, shrunk by the
-spec §5 relative guard (1e-6) so that rounding in `dr` and `r` never prunes.
+relative guard `g` (always `idx.guard`, spec §5) so that rounding in `dr` and `r`
+never prunes.
 """
-@inline _lb(dr::Float64, r::Float64) = max(0.0, dr - r - GUARD * (dr + r))
+@inline _lb(dr::Float64, r::Float64, g::Float64) = max(0.0, dr - r - g * (dr + r))
 
 # Skip rule of link!/unlink! (spec §6.3): hopeless for the nearest neighbour and,
 # when recording rewire candidates, hopeless for every rewire under the cluster.
@@ -1968,7 +1989,7 @@ spec §5 relative guard (1e-6) so that rounding in `dr` and `r` never prunes.
                                 nnd::Float64, l::Int, record::Bool)
     c = idx.levels[L+1].clusters[ci]
     dr = _mdist(memo, idx, q, c.rep)
-    lb = idx.is_metric ? _lb(dr, c.radius) : 0.0
+    lb = idx.is_metric ? _lb(dr, c.radius, idx.guard) : 0.0
     _skip(idx, lb, nnd, c, l, record) || heappush!(memo.front, (lb, L, ci), FWD)
     nothing
 end
@@ -2196,7 +2217,7 @@ function _knn!(memo::DistMemo, idx::HNNGIndex, q, k::Int)
     for (ci, c) in enumerate(idx.levels[T+1].clusters)
         c.rep == 0 && continue
         dr = _mdist(memo, idx, q, c.rep)
-        heappush!(front, (met ? _lb(dr, c.radius) : 0.0, T, ci), FWD)
+        heappush!(front, (met ? _lb(dr, c.radius, idx.guard) : 0.0, T, ci), FWD)
     end
     while !isempty(front)
         lb, L, ci = heappop!(front, FWD)
@@ -2213,7 +2234,7 @@ function _knn!(memo::DistMemo, idx::HNNGIndex, q, k::Int)
             cj = below.cluster_of[m]
             ch = below.clusters[cj]
             dr = ch.rep == m ? d : _mdist(memo, idx, q, ch.rep)
-            lbc = met ? _lb(dr, ch.radius) : 0.0
+            lbc = met ? _lb(dr, ch.radius, idx.guard) : 0.0
             (met && length(res) == k && lbc > res[1][1]) || heappush!(front, (lbc, L - 1, cj), FWD)
         end
     end
@@ -2371,7 +2392,7 @@ function knn_levelsync(idx::HNNGIndex, q, k::Integer)
         keep = Int[]
         for ci in list
             c = lv.clusters[ci]
-            lb = met ? _lb(offer(c.rep), c.radius) : 0.0
+            lb = met ? _lb(offer(c.rep), c.radius, idx.guard) : 0.0
             (met && length(res) == k && lb > res[1][1]) || push!(keep, ci)
         end
         if L == 0
@@ -3303,7 +3324,7 @@ isdefined(@__MODULE__, :brute_knn) || include(joinpath(@__DIR__, "oracle.jl"))
         @test HNNG.save(path, idx) == path
         idx2 = HNNG.load(path)
         @test verify(idx2)
-        @test idx2.metric == idx.metric && length(idx2) == 297 && idx2.nevals == 0
+        @test idx2.metric == idx.metric && idx2.guard == idx.guard && length(idx2) == 297 && idx2.nevals == 0
         @test same_structure(structure(idx2), structure(idx))
         for _ in 1:20
             q = randn(rng, Float32, 4)
@@ -3356,14 +3377,14 @@ const FORMAT_VERSION = 1
 """
     HNNG.save(path, idx) -> path
 
-Write the index with `Serialization`: store, tombstones, levels and, for a
+Write the index with `Serialization`: store, tombstones, levels, guard and, for a
 VectorStore with a Distances.jl metric, the metric. An ObjectStore or a `UserMetric`
 index is saved without its metric; `load` then needs `metric=`.
 """
 function save(path::AbstractString, idx::HNNGIndex)
     keep = idx.store isa VectorStore && !(idx.metric isa UserMetric)
     payload = (format=FORMAT, version=FORMAT_VERSION, store=idx.store,
-               metric=keep ? idx.metric : nothing, alive=idx.alive, levels=idx.levels)
+               metric=keep ? idx.metric : nothing, guard=idx.guard, alive=idx.alive, levels=idx.levels)
     open(io -> serialize(io, payload), path, "w")
     path
 end
@@ -3381,7 +3402,7 @@ function load(path::AbstractString; metric=nothing)
     m = metric === nothing ? p.metric : _wrap_metric(metric)
     m === nothing && throw(ArgumentError(
         "the index in $path has an ObjectStore or a UserMetric; pass metric= to load it"))
-    HNNGIndex(p.store, m, _is_metric_for(p.store, m), p.alive, p.levels, 0, DistMemo(), 0, 0)
+    HNNGIndex(p.store, m, _is_metric_for(p.store, m), p.guard, p.alive, p.levels, 0, DistMemo(), 0, 0)
 end
 ```
 
@@ -4465,8 +4486,9 @@ dijkstra_shortest_paths(g, 1, W).dists        # no new distance evaluation
 ## Exactness
 
 Exactness is relative to the package's own distance kernel. Every prune applies a
-relative guard of `1e-6` in favour of visiting, which absorbs rounding in the
-triangle inequality. `Float32` data accumulates in `Float32`; every stored distance,
+relative guard γ in favour of visiting, which absorbs rounding in the triangle
+inequality: `max(1e-6, 4·d·eps(T))` for vectors of dimension `d` and type `T`, `1e-6`
+for objects, or the value passed as `HNNGIndex(...; guard=γ)`. `Float32` data accumulates in `Float32`; every stored distance,
 radius and bound is `Float64`.
 
 ## Tests
