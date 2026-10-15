@@ -34,27 +34,27 @@
 Gaps or choices the spec leaves open. The spec is not changed; these are decided here.
 
 - **A1.** `HNNG.last_update_stats` (table above) is needed by Exp.3 and is not in spec §4.
-- **A2.** Spec §10 lists `test/recall_rule.jl` in the package tests for "the harness's two recall definitions". This plan tests the rules in `bench/test/runtests.jl` (they live in `bench/src/recall.jl`, inside the bench environment). The index plan should either drop `test/recall_rule.jl` or include `bench/src/recall.jl` from it.
+- **A2.** (Confirmed by the coordinator.) Spec §10 lists `test/recall_rule.jl` in the package tests for "the harness's two recall definitions". This plan tests the rules in `bench/test/runtests.jl` (they live in `bench/src/recall.jl`, inside the bench environment). The index plan should either drop `test/recall_rule.jl` or include `bench/src/recall.jl` from it.
 - **A3.** `bench/Project.toml` also lists `Distances` (for `Euclidean()`), `SHA` (Manifest hash) and the stdlibs it uses; spec §11 names only the main packages.
 - **A4.** The method supertype is `BenchMethod`, not `Method` (`Method` is a `Base` type).
 - **A5.** SimilaritySearch is loaded with `try import SimilaritySearch catch end` (`import`, not `using`, so its exports cannot clash with `build`/`query`). Spec §11 names both `ExhaustiveSearch` and `SearchGraph`, so both get rows (`SS-Exhaustive`, `SS-SearchGraph`) with default parameters. The calls (`MatrixDatabase`, `SearchGraph(; dist, db)`, `SearchGraphContext()`, `index!`, `ExhaustiveSearch(; dist, db)`, `GenericContext()`, `searchbatch -> (ids, dists)`) come from the 1.1 changelog and README in the notes and are not otherwise verified; experiment rows are skipped with a warning if any call throws.
-- **A6.** The generated `.tex` files hold only the `tabular` environment. The manuscript keeps its own `table` float, caption and label and `\input`s the file.
+- **A6.** (Confirmed.) The generated `.tex` files hold only the `tabular` environment. The manuscript keeps its own `table` float, caption and label and `\input`s the file.
 - **A7.** The table "Recall" column uses the ann-benchmarks rule. "HNSW (max recall attained)" = the HNSW row with the highest recall (ties: higher QPS). "HNSW (sweet spot)" = the fastest HNSW row with recall ≥ 0.99, else the max-recall row. When no HNSW row exists, an `SS-SearchGraph` row takes the HNSW place (spec §13).
-- **A8.** `tab_ops` "rebuild" = one full streaming rebuild (`add!` of all n points), which is what the TKDE text calls the "sequential rebuild"; speedup = rebuild / insert latency (TKDE: 0.46 s / 1.10 ms ≈ 419). The bulk rebuild is recorded as `op = rebuild-bulk` and gets its own macro.
+- **A8.** (Confirmed.) `tab_ops` "rebuild" = one full streaming rebuild (`add!` of all n points), which is what the TKDE text calls the "sequential rebuild"; speedup = rebuild / insert latency (TKDE: 0.46 s / 1.10 ms ≈ 419). The bulk rebuild is recorded as `op = rebuild-bulk` and gets its own macro.
 - **A9.** "Median per-operation latency of three runs" = median over the three runs of each run's mean per-operation latency. The three runs repeat the same build, inserts and deletes (fixed seeds). `exp3.csv` keeps every operation, so other summaries stay possible.
-- **A10.** Exp.2 indexes hNNG with the bulk loader (by spec §6.1 the structure is the same as a streaming build); ρ is reported for hNNG only. Exactness of all four methods is asserted during the run.
+- **A10.** (Confirmed.) Exp.2 indexes hNNG with the bulk loader (by spec §6.1 the structure is the same as a streaming build); ρ is reported for hNNG only. Exactness of all four methods is asserted during the run.
 - **A11.** Build time is one timed build after an untimed warm-up build on the first 200 columns, not best of three (full-size streaming builds take minutes). Query QPS is the best of three passes, as the spec says.
 - **A12.** Recall uses distances recomputed in Float64 from the returned ids, as ann-benchmarks recomputes from ids, not each library's own float output.
 - **A13.** Smoke runs subset the HDF5 data (first 300 train points, first 20 queries) and recompute ground truth by Float64 brute force. Full runs use the HDF5 `neighbors`/`distances` (+1 on ids).
 - **A14.** For Exp.3, HNSW.jl gets all `n + 200` points in its data vector, links `1:n` at build time, then links one point per insert (`add_to_graph!(g, [i])`). The HNSW delete row has a missing latency and the note `mark only`.
 - **A15.** BenchmarkTools is in `Project.toml` as the spec requires, but the timing code uses explicit `time_ns` loops: the protocol (best of three whole passes; mutating operations timed one by one) does not map onto BenchmarkTools' sampling.
 - **A16.** Smoke output goes to `bench/results-smoke/` (gitignored). `bench/results/` is committed after the full run (Task 12).
-- **A17.** The TKDE `ops_comparison` caption says "by dimension"; spec §11 sweeps n at d = 16. The figure follows the spec (x = n).
+- **A17.** Exp.3 runs the TKDE grid `n ∈ {8000, 16000, 32000} × d ∈ {16, 64, 128}` (spec §11 as revised in commit 6e8690d). In `exp3.csv`, `config = "table"` marks the three `tab_ops` rows and `config = "grid"` the other six; the figure uses all nine.
 - **A18.** Brute-force candidates: every point whose Float32 score is within τ = max(1e-4, 2·d·eps(Float32))·(‖q‖² + max‖x‖²) of the k-th score, re-ranked in Float64 (spec: "exact re-rank of the top candidates").
 - **A19.** KD-tree and ball tree use the NearestNeighbors.jl default leaf size 25.
 - **A20.** The TKDE tables mix precisions; this plan fixes one rule per column: recall `%.3f` (annbench) or `%.5f` (fashion); QPS integer with `{,}` separators when ≥ 100, else one decimal; build seconds three significant digits; ms with two decimals.
 - **A21.** Blobs assign point i to centre `((i-1) mod 100) + 1` (equal counts, as `make_blobs` does, in a different order).
-- **A22.** HNSW.jl is loaded like SimilaritySearch (`try import HNSW catch end`, flag `HAS_HNSW`), so that spec §13's fallback (SearchGraph takes HNSW's rows when HNSW.jl fails to load) works instead of the whole harness failing to load.
+- **A22.** (Confirmed.) HNSW.jl is loaded like SimilaritySearch (`try import HNSW catch end`, flag `HAS_HNSW`), so that spec §13's fallback (SearchGraph takes HNSW's rows when HNSW.jl fails to load) works instead of the whole harness failing to load.
 
 ## Global Constraints
 
@@ -66,7 +66,7 @@ Gaps or choices the spec leaves open. The spec is not changed; these are decided
 - Data: `random-xs-20-euclidean.hdf5` and `fashion-mnist-784-euclidean.hdf5` from `/home/coral/working/benchmarks/data/` (`train`, `test`, `neighbors`, `distances`).
 - HNSW.jl: `M = 16`, `efConstruction = 200`, `ef` sweep `{10, 20, 40, 80, 160, 320, 640}`.
 - Exp.2: `d ∈ {2, 4, 8, 16, 32, 64, 128}`, 1,000 queries; Gaussian `N(0, I_d)` with `n = 5,000`; 100-centre blobs with `n = 10,000`, centres uniform in `[-10, 10]^d`, unit isotropic standard deviation.
-- Exp.3: table rows `(n, d) ∈ {(8000, 16), (32000, 16), (32000, 128)}`; figure sweep `n ∈ {1k, 2k, 5k, 10k, 20k, 60k}` at `d = 16`; 200 inserts then 200 deletes of random live ids; median of three runs; 20 random queries checked against brute force after every operation (assertion, not timed).
+- Exp.3: Gaussian data on the TKDE grid `n ∈ {8000, 16000, 32000} × d ∈ {16, 64, 128}`; table rows `(8000, 16)`, `(32000, 16)`, `(32000, 128)`; figure with three panels (one per `d`), `n` on a log axis, three lines (full rebuild, insert, delete); streaming and bulk rebuild times recorded; 200 inserts then 200 deletes of random live ids; median of three runs; 20 random queries checked against brute force after every operation (assertion, not timed).
 - Outputs: `bench/results/{exp1,exp1b,exp2,exp3}.csv`, `env.txt`, `bench/results/tex/{tab_annbench,tab_fashion,tab_ops,macros}.tex`, `bench/results/fig/{recall_qps,dist_eval_vs_dim,qps_vs_dim,ops_comparison}.pdf`.
 - "Throughput parity with the C++ numbers in the TKDE draft is not a goal and is not promised."
 - All randomness uses `StableRNGs` with the fixed seeds at the top of `bench/src/datasets.jl`; HNSW.jl's internal draws use `Random.seed!(SEED_HNSW)`.
@@ -104,7 +104,7 @@ CSV schemas (fixed in Task 1, checked by every experiment test):
 - `exp2.csv`: `geometry, n, d, nq, k, method, build_s, qps, recall_ann, frac_evaluated, nlevels`
 - `exp3.csv`: `config, n, d, run, method, op, seq, latency_s, nevals, rewired, top_level, note`
 
-`method` values: `hNNG-incremental`, `hNNG-bulk`, `brute-BLAS`, `KD-tree`, `ball-tree`, `HNSW`, `SS-SearchGraph`, `SS-Exhaustive` (Exp.3 uses `hNNG` for the index under update). `nclusters` is the per-level cluster count joined with `;`, level 0 first. `op` values: `insert`, `delete`, `rebuild`, `rebuild-bulk`, `update`.
+`method` values: `hNNG-incremental`, `hNNG-bulk`, `brute-BLAS`, `KD-tree`, `ball-tree`, `HNSW`, `SS-SearchGraph`, `SS-Exhaustive` (Exp.3 uses `hNNG` for the index under update). `nclusters` is the per-level cluster count joined with `;`, level 0 first. `op` values: `insert`, `delete`, `rebuild`, `rebuild-bulk`, `update`. Exp.3 `config` values: `table` (one of the three `tab_ops` rows) or `grid` (the other six grid points).
 
 Every script loads `BenchCore` with `using .BenchCore` next to `using DataFrames` and, in `plots.jl`, `using CairoMakie`, all in `Main`. BenchCore's exported names therefore must not repeat theirs: that is why the smoke subset is `smoke_subset` (DataFrames exports `subset`) and the random index is `draw_index` (Makie exports `pick`). The `run_all` test (Task 11) loads every script in one session and catches any new clash.
 
@@ -1399,11 +1399,13 @@ git commit -m "bench: Exp.2 dimension sweep on Gaussian and blob data" -m "Co-Au
 
 **Interfaces:**
 - Consumes: `gaussian`, `dist64`, `draw_index`, `SEED_EXP3_*`, `HAS_HNSW` (Task 1); `check_protocol` (Task 3); `KDTreeNN`, `BallTreeNN`, `build_time`, `method_name` (Task 4); `HNSWjl`, `build_hnsw`, `hnsw_insert!` (Task 5); HNNG API including `HNNG.last_update_stats` (header table).
-- Produces: `op_latency(exp3::AbstractDataFrame, config, method, op) -> DataFrame(n::Int, d::Int, latency_s::Float64)` in BenchCore (median over runs of each run's mean latency, rows sorted by `(n, d)`); `run_exp3(; smoke::Bool = is_smoke(), outdir = results_dir(smoke)) -> DataFrame`, writing `outdir/exp3.csv` with schema `SCHEMA_EXP3`; `struct Exp3Config(config, n, d, nops, runs, ncheck)`; `exp3_configs(smoke::Bool) -> Vector{Exp3Config}`; `check_exact!(idx, P, alive, Qc, qi, ncheck; k = 10) -> Int`.
+- Produces: `op_latency(exp3::AbstractDataFrame, config::Union{Nothing,AbstractString}, method, op) -> DataFrame(n::Int, d::Int, latency_s::Float64)` in BenchCore (median over runs of each run's mean latency, rows sorted by `(n, d)`; `config = nothing` takes every configuration); `run_exp3(; smoke::Bool = is_smoke(), outdir = results_dir(smoke)) -> DataFrame`, writing `outdir/exp3.csv` with schema `SCHEMA_EXP3`; `struct Exp3Config(config, n, d, nops, runs, ncheck)`; `exp3_configs(smoke::Bool) -> Vector{Exp3Config}`; `check_exact!(idx, P, alive, Qc, qi, ncheck; k = 10) -> Int`.
 
 Rows written per configuration and run: `hNNG` `rebuild` (streaming `add!` of the n build points) and `rebuild-bulk` (`bulk_add!`), then one `insert` row per insert and one `delete` row per delete with `nevals`, `rewired`, `top_level`; `KD-tree` and `ball-tree` `rebuild`; `brute-BLAS` `update` with latency 0 and note `no update cost`; `HNSW` one `insert` row per insert and one `delete` row with missing latency and note `mark only`.
 
-Smoke sizes: table configurations `(300, 2)` and `(300, 8)`, sweep `n ∈ {200, 300}` at `d = 8`, 20 inserts and 20 deletes, 3 runs, 5 checked queries per operation.
+Configurations: the nine grid points `n ∈ {8000, 16000, 32000} × d ∈ {16, 64, 128}`, each with 200 inserts, 200 deletes, 3 runs and 20 checked queries per operation; `(8000, 16)`, `(32000, 16)`, `(32000, 128)` get `config = "table"`, the rest `config = "grid"`.
+
+Smoke sizes: grid `n ∈ {200, 300} × d ∈ {2, 8}` with table rows `(200, 2)`, `(300, 2)`, `(300, 8)` (the same corners of the grid), 20 inserts and 20 deletes, 3 runs, 5 checked queries per operation.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1430,7 +1432,19 @@ isdefined(Main, :run_exp3) || include(joinpath(BENCH_DIR, "exp3.jl"))
         s = op_latency(df, "table", "hNNG", "insert")
         @test nrow(s) == 1 && s.n[1] == 100 && s.d[1] == 4 && s.latency_s[1] == 2.0
         @test nrow(op_latency(df, "table", "HNSW", "delete")) == 0
-        @test nrow(op_latency(df, "sweep", "hNNG", "insert")) == 0
+        @test nrow(op_latency(df, "grid", "hNNG", "insert")) == 0
+        @test nrow(op_latency(df, nothing, "hNNG", "insert")) == 1
+    end
+
+    @testset "configurations: the TKDE grid, table rows at its corners" begin
+        full = exp3_configs(false)
+        @test length(full) == 9
+        @test sort([(c.n, c.d) for c in full]) == sort([(n, d) for n in (8000, 16000, 32000) for d in (16, 64, 128)])
+        @test sort([(c.n, c.d) for c in full if c.config == "table"]) == [(8000, 16), (32000, 16), (32000, 128)]
+        @test all(c -> (c.nops, c.runs, c.ncheck) == (200, 3, 20), full)
+        smoke = exp3_configs(true)
+        @test length(smoke) == 4
+        @test sort([(c.n, c.d) for c in smoke if c.config == "table"]) == [(200, 2), (300, 2), (300, 8)]
     end
 
     @testset "exactness check catches a wrong answer" begin
@@ -1464,9 +1478,11 @@ isdefined(Main, :run_exp3) || include(joinpath(BENCH_DIR, "exp3.jl"))
             hd = df[(df.method .== "HNSW") .& (df.op .== "delete"), :]
             @test nrow(hd) == (HAS_HNSW ? 12 : 0)
             @test all(hd.note .== "mark only") && all(ismissing, hd.latency_s)
-            @test nrow(op_latency(df, "table", "hNNG", "insert")) == 2
-            @test nrow(op_latency(df, "sweep", "KD-tree", "rebuild")) == 2
-            @test nrow(op_latency(df, "sweep", "HNSW", "insert")) == (HAS_HNSW ? 2 : 0)
+            @test nrow(op_latency(df, "table", "hNNG", "insert")) == 3
+            @test nrow(op_latency(df, "grid", "hNNG", "insert")) == 1
+            @test nrow(op_latency(df, nothing, "hNNG", "rebuild")) == 4
+            @test nrow(op_latency(df, nothing, "KD-tree", "rebuild")) == 4
+            @test nrow(op_latency(df, nothing, "HNSW", "insert")) == (HAS_HNSW ? 4 : 0)
         end
     end
 end
@@ -1491,12 +1507,15 @@ export op_latency
 """
     op_latency(exp3, config, method, op) -> DataFrame(n, d, latency_s)
 
-Per (n, d) of `config`: the median over runs of each run's mean latency of `op` by
-`method` (spec assumption A9). Rows with a missing latency are ignored; rows sorted by (n, d).
+Per (n, d) of `config` (`nothing` = every configuration): the median over runs of each
+run's mean latency of `op` by `method` (spec assumption A9). Rows with a missing latency
+are ignored; rows sorted by (n, d).
 """
-function op_latency(exp3::AbstractDataFrame, config::AbstractString, method::AbstractString, op::AbstractString)
+function op_latency(exp3::AbstractDataFrame, config::Union{Nothing,AbstractString},
+                    method::AbstractString, op::AbstractString)
     out = DataFrame(n = Int[], d = Int[], latency_s = Float64[])
-    sel = exp3[(exp3.config .== config) .& (exp3.method .== method) .& (exp3.op .== op), :]
+    inconfig = config === nothing ? trues(nrow(exp3)) : (exp3.config .== config)
+    sel = exp3[inconfig .& (exp3.method .== method) .& (exp3.op .== op), :]
     nrow(sel) == 0 && return out
     for g in groupby(sel, [:n, :d]; sort = true)
         per_run = Float64[]
@@ -1521,13 +1540,13 @@ using CSV, DataFrames, StableRNGs
 using Distances: Euclidean
 import HNNG
 
-const EXP3_TABLE = [(8000, 16), (32000, 16), (32000, 128)]
-const EXP3_SWEEP_N = [1000, 2000, 5000, 10000, 20000, 60000]
-const EXP3_SWEEP_D = 16
+const EXP3_NS = [8000, 16000, 32000]                     # TKDE grid
+const EXP3_DS = [16, 64, 128]
+const EXP3_TABLE = [(8000, 16), (32000, 16), (32000, 128)]  # tab_ops rows
 const EXP3_K = 10
 
 struct Exp3Config
-    config::String   # "table" (tab_ops rows) or "sweep" (ops_comparison figure)
+    config::String   # "table" (also a tab_ops row) or "grid"; the figure uses both
     n::Int
     d::Int
     nops::Int        # inserts, then the same number of deletes
@@ -1536,12 +1555,10 @@ struct Exp3Config
 end
 
 function exp3_configs(smoke::Bool)
-    if smoke
-        return vcat([Exp3Config("table", n, d, 20, 3, 5) for (n, d) in ((300, 2), (300, 8))],
-                    [Exp3Config("sweep", n, 8, 20, 3, 5) for n in (200, 300)])
-    end
-    return vcat([Exp3Config("table", n, d, 200, 3, 20) for (n, d) in EXP3_TABLE],
-                [Exp3Config("sweep", n, EXP3_SWEEP_D, 200, 3, 20) for n in EXP3_SWEEP_N])
+    ns, ds, table = smoke ? ([200, 300], [2, 8], [(200, 2), (300, 2), (300, 8)]) :
+                            (EXP3_NS, EXP3_DS, EXP3_TABLE)
+    nops, runs, ncheck = smoke ? (20, 3, 5) : (200, 3, 20)
+    return [Exp3Config((n, d) in table ? "table" : "grid", n, d, nops, runs, ncheck) for d in ds for n in ns]
 end
 
 new_index3(d::Int) = HNNG.HNNGIndex(Euclidean(), d; T = Float32)
@@ -1736,7 +1753,9 @@ Macros written to `macros.tex` (one `\newcommand` each; `n/a` when the source ro
 | `\hnswSweetRecallFashion`, `\hnswSweetQpsFashion` | sweet-spot HNSW row: recall `%.3f`, QPS | exp1b |
 | `\hnngIncBuildFashion`, `\hnngBulkBuildFashion`, `\bulkBuildSpeedupFashion` | build seconds; ratio `%.1f` | exp1b |
 | `\rewireMean`, `\rewireMax` | level-0 rewires over every hNNG insert and delete of the table configurations, mean `%.2f`, max | exp3 |
-| `\insertMsLargest`, `\deleteMsLargest`, `\rebuildSLargest`, `\speedupLargest`, `\speedupBulkLargest` | last table configuration, (32000, 128) in the full run | exp3 |
+| `\insertMsLargest`, `\deleteMsLargest`, `\rebuildSLargest`, `\bulkRebuildSLargest`, `\speedupLargest`, `\speedupBulkLargest` | last table configuration, (32000, 128) in the full run; `\bulkRebuildSLargest` is the bulk rebuild in seconds | exp3 |
+
+The manuscript uses these thirteen: `\rhoDtwo \rhoDeight \rhoDsixteen \rhoDthirtytwo \rewireMean \rewireMax \hnngQpsRandomXs \bruteQpsRandomXs \hnngBulkBuildFashion \hnngIncBuildFashion \insertMsLargest \rebuildSLargest \bulkRebuildSLargest`; the test below checks that each one is written.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1851,8 +1870,13 @@ bs(s) = s * "\\\\"   # append the LaTeX row end \\ (a raw string cannot end in a
         @test has("rewireMean", "4.00") && has("rewireMax", "5")
         @test has("insertMsLargest", "5.86") && has("deleteMsLargest", "8.59")
         @test has("rebuildSLargest", "30.8") && has("speedupLargest", "5{,}256")
-        @test has("speedupBulkLargest", "392")
-        @test count("\\newcommand", tex) == 29
+        @test has("speedupBulkLargest", "392") && has("bulkRebuildSLargest", "2.30")
+        @test count("\\newcommand", tex) == 30
+        for name in ("rhoDtwo", "rhoDeight", "rhoDsixteen", "rhoDthirtytwo", "rewireMean", "rewireMax",
+                     "hnngQpsRandomXs", "bruteQpsRandomXs", "hnngBulkBuildFashion", "hnngIncBuildFashion",
+                     "insertMsLargest", "rebuildSLargest", "bulkRebuildSLargest")   # used by the manuscript
+            @test occursin("\\newcommand{\\$name}{", tex)
+        end
     end
 end
 ```
@@ -2023,6 +2047,7 @@ function macros_tex(exp1, exp1b, exp2, exp3)
     push!(m, "insertMsLargest" => or_na(r -> fmt_fixed(1000 * r.insert_s, 2), largest))
     push!(m, "deleteMsLargest" => or_na(r -> fmt_fixed(1000 * r.delete_s, 2), largest))
     push!(m, "rebuildSLargest" => or_na(r -> fmt_sig3(r.rebuild_s), largest))
+    push!(m, "bulkRebuildSLargest" => or_na(r -> fmt_sig3(r.rebuild_bulk_s), largest))
     push!(m, "speedupLargest" => or_na(r -> fmt_int(r.rebuild_s / r.insert_s), largest))
     push!(m, "speedupBulkLargest" => or_na(r -> fmt_int(r.rebuild_bulk_s / r.insert_s), largest))
     return join((macro_line(k, v) for (k, v) in m), "\n") * "\n"
@@ -2074,9 +2099,9 @@ git commit -m "bench: TKDE-layout LaTeX tables and manuscript macros from the CS
 
 **Interfaces:**
 - Consumes: `op_latency`, `empty_exp3`, `results_dir` (Tasks 1, 8); CSV columns of `SCHEMA_EXP1/2/3`.
-- Produces: `plot_recall_qps(exp1, path)`, `plot_dist_eval(exp2, path)`, `plot_qps_dim(exp2, path)`, `plot_ops(exp3, path)`, each returning `path`; `write_plots(resdir = results_dir()) -> figdir`, writing `fig/recall_qps.pdf` (from exp1.csv, random-xs), `fig/dist_eval_vs_dim.pdf`, `fig/qps_vs_dim.pdf` (from exp2.csv), `fig/ops_comparison.pdf` (from the exp3.csv sweep rows).
+- Produces: `plot_recall_qps(exp1, path)`, `plot_dist_eval(exp2, path)`, `plot_qps_dim(exp2, path)`, `plot_ops(exp3, path)`, each returning `path`; `write_plots(resdir = results_dir()) -> figdir`, writing `fig/recall_qps.pdf` (from exp1.csv, random-xs), `fig/dist_eval_vs_dim.pdf`, `fig/qps_vs_dim.pdf` (from exp2.csv), `fig/ops_comparison.pdf` (from every hNNG row of exp3.csv); helper `n_label(n) -> String` (`8000 -> "8k"`).
 
-Encoding: one colour and marker per method in a fixed order, the same in every figure. The palette was checked with the dataviz validator on a light surface: all checks pass; three hues sit below 3:1 contrast, so every series also has its own marker, and every figure has a legend. In `ops_comparison`, line style encodes the operation (solid insert, dashed delete, dotted rebuild). One y-axis per panel, no dual axes.
+Encoding: one colour and marker per method in a fixed order, the same in every figure. The palette was checked with the dataviz validator on a light surface: all checks pass; three hues sit below 3:1 contrast, so every series also has its own marker, and every figure has a legend. `ops_comparison` follows the TKDE layout: three panels side by side, one per `d` (titles `d = 16`, `d = 64`, `d = 128`), x = n on a log axis with ticks 8k, 16k, 32k, y = milliseconds per operation on a log axis, three lines (full rebuild per op, incremental insert, incremental delete) that differ in colour, marker and line style, a text label `rebuild/insert ≈ N×` at the largest n in each panel, and one shared legend below. One y-axis per panel (linked), no dual axes.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2102,12 +2127,15 @@ ispdf(p) = isfile(p) && filesize(p) > 1000 && open(io -> String(read(io, 4)), p)
                      frac_evaluated = [m == "hNNG-bulk" ? 0.3 : missing for m in repeat(methods2, 4)])
     exp3 = empty_exp3()
     series = (("hNNG", "insert", 1e-3), ("hNNG", "delete", 2e-3), ("hNNG", "rebuild", 0.5),
-              ("hNNG", "rebuild-bulk", 0.1), ("HNSW", "insert", 5e-4), ("KD-tree", "rebuild", 0.01),
-              ("ball-tree", "rebuild", 0.02))
-    for n in (1000, 2000), run in 1:3, (meth, op, t) in series
-        push!(exp3, (config = "sweep", n = n, d = 16, run = run, method = meth, op = op, seq = 1,
-                     latency_s = t * n / 1000, nevals = missing, rewired = missing, top_level = missing, note = ""))
+              ("hNNG", "rebuild-bulk", 0.1), ("HNSW", "insert", 5e-4), ("KD-tree", "rebuild", 0.01))
+    for n in (8000, 16000, 32000), d in (16, 64, 128), run in 1:3, (meth, op, t) in series
+        cfg = (n, d) in ((8000, 16), (32000, 16), (32000, 128)) ? "table" : "grid"
+        push!(exp3, (config = cfg, n = n, d = d, run = run, method = meth, op = op, seq = 1,
+                     latency_s = t * (n / 8000) * (d / 16), nevals = missing, rewired = missing,
+                     top_level = missing, note = ""))
     end
+    @test n_label(8000) == "8k" && n_label(32000) == "32k" && n_label(300) == "300"
+    @test speedup_label(0.46, 0.0011) == "rebuild/insert ≈ 418×"
     mktempdir() do dir
         @test ispdf(plot_recall_qps(exp1, joinpath(dir, "recall_qps.pdf")))
         @test ispdf(plot_dist_eval(exp2, joinpath(dir, "dist_eval_vs_dim.pdf")))
@@ -2150,15 +2178,12 @@ const GEOMETRY_STYLE = Dict(
     "gaussian" => (color = "#2a78d6", marker = :circle, label = "Gaussian"),
     "blobs"    => (color = "#eb6834", marker = :rect,   label = "100 blobs"),
 )
-# (method, op, label, colour, marker, line style): solid = insert, dash = delete, dot = rebuild
-const OPS_SERIES = [
-    ("hNNG",      "insert",       "hNNG insert",              "#2a78d6", :circle,    :solid),
-    ("hNNG",      "delete",       "hNNG delete",              "#2a78d6", :circle,    :dash),
-    ("hNNG",      "rebuild",      "hNNG rebuild (streaming)", "#2a78d6", :circle,    :dot),
-    ("hNNG",      "rebuild-bulk", "hNNG rebuild (bulk)",      "#eb6834", :rect,      :dot),
-    ("HNSW",      "insert",       "HNSW insert",              "#008300", :xcross,    :solid),
-    ("KD-tree",   "rebuild",      "KD-tree rebuild",          "#eda100", :utriangle, :dot),
-    ("ball-tree", "rebuild",      "ball tree rebuild",        "#e87ba4", :dtriangle, :dot),
+# TKDE ops_comparison lines (hNNG only), fixed order: (op, label, colour, marker, line style).
+# The three operations are the entities here, so they take categorical slots 1-3.
+const OPS_LINES = [
+    ("rebuild", "full rebuild per op", "#2a78d6", :rect,    :dot),
+    ("insert",  "incremental insert",  "#eb6834", :circle,  :solid),
+    ("delete",  "incremental delete",  "#1baf7a", :diamond, :dash),
 ]
 
 function save_pdf(fig, path::AbstractString)
@@ -2231,19 +2256,42 @@ function plot_qps_dim(exp2::AbstractDataFrame, path::AbstractString)
     return save_pdf(fig, path)
 end
 
-"Per-operation cost against index size n (Exp.3 sweep): updates vs full rebuilds."
+"Tick label for an index size: 8000 -> \"8k\", 300 -> \"300\"."
+n_label(n::Integer) = n % 1000 == 0 ? "$(n ÷ 1000)k" : string(n)
+
+"Panel annotation: rebuild time over insert time at the largest n."
+speedup_label(rebuild_s::Real, insert_s::Real) = "rebuild/insert ≈ $(round(Int, rebuild_s / insert_s))×"
+
+"TKDE ops_comparison: one panel per d, x = n (log), y = ms per operation (log), shared legend."
 function plot_ops(exp3::AbstractDataFrame, path::AbstractString)
-    sweep_d = unique(exp3[exp3.config .== "sweep", :d])
-    fig = Figure(size = (600, 460), fontsize = 14)
-    ax = Axis(fig[1, 1]; xlabel = "index size n (d = $(join(sweep_d, ", ")))",
-              ylabel = "seconds per operation", xscale = log10, yscale = log10)
-    for (meth, op, label, color, marker, ls) in OPS_SERIES
-        s = op_latency(exp3, "sweep", meth, op)
-        nrow(s) == 0 && continue
-        scatterlines!(ax, Float64.(s.n), s.latency_s; color = color, marker = marker, linestyle = ls,
-                      markersize = 10, linewidth = 2, label = label)
+    h = exp3[exp3.method .== "hNNG", :]
+    ds = sort(unique(Int.(h.d)))
+    isempty(ds) && error("exp3 has no hNNG rows to plot")
+    fig = Figure(size = (1100, 440), fontsize = 14)
+    panels = Axis[]
+    for (col, d) in enumerate(ds)
+        sub = h[h.d .== d, :]
+        ns = sort(unique(Int.(sub.n)))
+        ax = Axis(fig[1, col]; title = "d = $d", xlabel = "n",
+                  ylabel = col == 1 ? "time per operation (ms)" : "",
+                  xscale = log10, yscale = log10, xticks = (ns, n_label.(ns)))
+        push!(panels, ax)
+        lat = Dict(op => op_latency(sub, nothing, "hNNG", op) for (op, _, _, _, _) in OPS_LINES)
+        for (op, label, color, marker, ls) in OPS_LINES
+            s = lat[op]
+            nrow(s) == 0 && continue
+            scatterlines!(ax, Float64.(s.n), 1000 .* s.latency_s; color = color, marker = marker,
+                          linestyle = ls, markersize = 10, linewidth = 2, label = label)
+        end
+        reb, ins = lat["rebuild"], lat["insert"]
+        if nrow(reb) > 0 && nrow(ins) > 0
+            text!(ax, Float64(reb.n[end]), 1000 * reb.latency_s[end];
+                  text = speedup_label(reb.latency_s[end], ins.latency_s[end]),
+                  align = (:right, :bottom), offset = (-6, 6), fontsize = 12)
+        end
     end
-    axislegend(ax; position = :lt, framevisible = false)
+    length(panels) > 1 && linkyaxes!(panels...)
+    Legend(fig[2, 1:length(panels)], panels[1]; orientation = :horizontal, framevisible = false)
     return save_pdf(fig, path)
 end
 
@@ -2304,8 +2352,9 @@ isdefined(Main, :run_all) || include(joinpath(BENCH_DIR, "run_all.jl"))
             @test isfile(joinpath(out, f))
         end
         ops = readlines(joinpath(out, "tex", "tab_ops.tex"))
-        @test any(startswith(l, "300 (\$2\$) & ") for l in ops)
-        @test any(startswith(l, "300 (\$8\$) & ") for l in ops)
+        for row in ("200 (\$2\$) & ", "300 (\$2\$) & ", "300 (\$8\$) & ")
+            @test count(l -> startswith(l, row), ops) == 1
+        end
         annbench = read(joinpath(out, "tex", "tab_annbench.tex"), String)
         @test occursin("hNNG (incremental build) & 1.000 & ", annbench)
         @test occursin("HNSW (sweet spot) & ", annbench) == HAS_HNSW
@@ -2418,7 +2467,7 @@ directory. One step at a time: `julia -t 1 --project=bench bench/exp1.jl` (likew
 |---|---|
 | `exp1.csv`, `exp1b.csv` | random-xs-20 and fashion-mnist-784: build time, QPS, both recalls, fraction evaluated, hNNG levels and cluster counts, one HNSW row per `ef` |
 | `exp2.csv` | Gaussian (n = 5,000) and 100 blobs (n = 10,000), d = 2 to 128: ρ, QPS, build time, levels |
-| `exp3.csv` | every insert and delete: latency, distance evaluations, level-0 rewires, highest level touched; rebuild baselines |
+| `exp3.csv` | Gaussian grid n ∈ {8,000, 16,000, 32,000} × d ∈ {16, 64, 128}, every insert and delete: latency, distance evaluations, level-0 rewires, highest level touched; streaming and bulk rebuilds and the baselines |
 | `env.txt` | Julia version, Manifest hash, CPU model, governor, allowed CPUs, threads, commit, date |
 | `tex/` | `tab_annbench.tex`, `tab_fashion.tex`, `tab_ops.tex` (tabular bodies) and `macros.tex` |
 | `fig/` | `recall_qps.pdf`, `dist_eval_vs_dim.pdf`, `qps_vs_dim.pdf`, `ops_comparison.pdf` |
@@ -2464,12 +2513,12 @@ git commit -m "bench: run_all pipeline, pinned run.sh wrapper, README benchmark 
 - Consumes: `bench/run.sh` (Task 11).
 - Produces: the committed files the manuscript `\input`s and `\includegraphics`es.
 
-This run takes hours (Fashion-MNIST streaming build and 10,000 queries per method, Exp.3 up to n = 60,000). Run it on the machine the manuscript names, with nothing else heavy running.
+This run takes hours (Fashion-MNIST streaming build and 10,000 queries per method, the nine Exp.3 grid points up to n = 32,000, d = 128). Run it on the machine the manuscript names, with nothing else heavy running.
 
 - [ ] **Step 1: Start the pinned full run in the background**
 
 Run: `bench/run.sh > bench/run.log 2>&1` (in the background; wait for it to exit)
-Expected: exit status 0; the last `[ Info:` lines of `bench/run.log` are the Exp.3 sweep configurations, and no `Error` line appears.
+Expected: exit status 0; the last `[ Info:` line of `bench/run.log` is the Exp.3 configuration n = 32000, d = 128, and no `Error` line appears.
 
 - [ ] **Step 2: Check the run against the protocol and the exactness contract**
 
