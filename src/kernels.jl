@@ -176,10 +176,15 @@ roundings per term); `sqrt` is monotone, so `δ_{j*} ≤ δ_{j₀}` gives
 `k_{j*} ≤ k_{j₀}(1 + 3eps(Float64))`, so `s_{j*} ≤ s_{j₀}(1 + τ) + 2.1d·u_sub` with
 `τ = 2γ_h + 3eps(Float64) < (d ÷ 16 + 20)·eps(T)`. (3) Hence `sq_{j*} ≤ s_{j*} + E ≤
 a + τ·|a| + 2E(1+τ) + 2.1d·u_sub ≤ L`. The bound assumes no overflow: when
-`8N ≥ floatmax(T)` the direct path runs instead. Counts `m(m−1)` Gram pairs plus
-every re-rank in `idx.nevals`.
+`8N ≥ floatmax(T)` the direct path runs instead. It also assumes
+`eps(T) ≥ eps(Float64)` (the norms and the combine round in `Float64`), so only
+`T ∈ {Float16, Float32, Float64}` takes the Gram path; any other `T` (e.g. `BigFloat`)
+runs the direct path. A row whose candidate list stays longer than `max(64, m ÷ 4)`
+(norms far above the distances) drops its list and is re-ranked by a direct scan over
+all `j ≠ i`. Counts `m(m−1)` Gram pairs plus every re-rank in `idx.nevals`.
 """
 function _allpairs_nn_blas(idx::HNNGIndex{VectorStore{T}}, pop::Vector{Int}) where {T}
+    T <: Union{Float16,Float32,Float64} || return _allpairs_nn_direct(idx, pop)
     m = length(pop)
     d = dim(idx.store)
     P = Matrix{T}(undef, d, m)
@@ -200,15 +205,19 @@ function _allpairs_nn_blas(idx::HNNGIndex{VectorStore{T}}, pop::Vector{Int}) whe
     G = Matrix{T}(undef, BULK_TILE, BULK_TILE)
     amin = fill(Inf, BULK_TILE)
     cand = [Tuple{Float64,Int}[] for _ in 1:BULK_TILE]
+    full = falses(BULK_TILE)                               # row re-ranked by a direct scan
+    maxcand = max(64, m ÷ 4)
     nexact = 0
     limit(ii, i) = amin[ii] + rel * abs(amin[ii]) + slack * (nrm[i] + nmax) + tiny
     for I in Iterators.partition(1:m, BULK_TILE)
         fill!(amin, Inf)
         foreach(empty!, cand)
+        fill!(full, false)
         for J in Iterators.partition(1:m, BULK_TILE)
             Gv = view(G, 1:length(I), 1:length(J))
             mul!(Gv, transpose(view(P, :, I)), view(P, :, J))
             for (ii, i) in enumerate(I)
+                full[ii] && continue
                 for (jj, j) in enumerate(J)
                     j == i && continue
                     sq = nrm[i] + nrm[j] - 2 * Float64(Gv[ii, jj])
@@ -218,12 +227,27 @@ function _allpairs_nn_blas(idx::HNNGIndex{VectorStore{T}}, pop::Vector{Int}) whe
                 if length(cand[ii]) > 64
                     lim = limit(ii, i)
                     filter!(p -> p[1] <= lim, cand[ii])
+                    if length(cand[ii]) > maxcand
+                        full[ii] = true
+                        empty!(cand[ii])
+                    end
                 end
             end
         end
         for (ii, i) in enumerate(I)
             lim = limit(ii, i)
             pi_ = view(P, :, i)
+            if full[ii]
+                for j in 1:m
+                    j == i && continue
+                    dj = _euclid(pi_, view(P, :, j))
+                    nexact += 1
+                    if _better(dj, pop[j], nnd[i], nn[i])
+                        nn[i], nnd[i] = pop[j], dj
+                    end
+                end
+                continue
+            end
             for (sq, j) in cand[ii]
                 sq <= lim || continue
                 dj = _euclid(pi_, view(P, :, j))

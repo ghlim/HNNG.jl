@@ -193,4 +193,33 @@ end
         pop = collect(1:n)
         @test HNNG._allpairs_nn_blas(idx, pop) == HNNG._allpairs_nn_direct(idx, pop)
     end
+    # eps(T) < eps(Float64): BigFloat takes the direct path
+    X = [BigFloat(1e10) + BigFloat(rand(rng, -1000:1000)) * BigFloat(1e-5) for _ in 1:3, _ in 1:24]
+    idx = HNNGIndex(Euclidean(), 3; T=BigFloat)
+    for j in axes(X, 2)
+        HNNG._append!(idx.store, HNNG._prepare(idx, view(X, :, j)))
+        push!(idx.alive, true)
+    end
+    pop = collect(1:24)
+    @test HNNG._allpairs_nn_blas(idx, pop) == HNNG._allpairs_nn_direct(idx, pop)
+    S = HNNGIndex(Euclidean(), 3; T=BigFloat)
+    add!(S, X)
+    @test verify(S)
+    B = HNNGIndex(Euclidean(), 3; T=BigFloat)
+    @test bulk_add!(B, X) == 1:24
+    @test verify(B)
+    @test same_structure(structure(B), structure(S))
+    # norms far above the distances: rows whose candidate list overflows scan directly
+    d, n = 20, 600
+    idx = HNNGIndex(Euclidean(), d; T=Float32)
+    X = gauss(rng, Float32, d, n) .+ 1f4
+    for j in axes(X, 2)
+        HNNG._append!(idx.store, HNNG._prepare(idx, view(X, :, j)))
+        push!(idx.alive, true)
+    end
+    pop = collect(1:n)
+    idx.nevals = 0
+    @test HNNG._allpairs_nn_blas(idx, pop) == HNNG._allpairs_nn_direct(idx, pop)
+    nexact = idx.nevals - 2 * n * (n - 1)
+    @test nexact > n * max(64, n ÷ 4)                # only a full row re-ranks more than that
 end
