@@ -2,8 +2,8 @@ module HNNG
 
 using Distances: Distances, PreMetric, Metric, Euclidean, SqEuclidean, CosineDist
 using DataStructures: heappush!, heappop!
-using LinearAlgebra: mul!
 using Serialization: serialize, deserialize
+using LinearAlgebra: mul!
 
 export HNNGIndex, UserMetric, Euclidean, SqEuclidean, CosineDist
 export is_metric, nlevels, element, verify, add!, knn, knn_batch, stats, reset_evals!, bulk_add!
