@@ -79,3 +79,27 @@ function check_knn(idx, q, k)
     bids, bds = brute_knn(idx, q, k)
     ids == bids && ds == bds
 end
+
+"""`n` descriptor sets: `d × m` matrices, `m` drawn from `mmin:mmax`, each set around its own centre."""
+descriptor_sets(rng, d, n; mmin=2, mmax=9) =
+    [randn(rng, d, rand(rng, mmin:mmax)) .+ 3 .* randn(rng, d) for _ in 1:n]
+
+_pd(a, b) = sqrt(sum(abs2, a .- b))
+_sq(a, b) = sum(abs2, a .- b)
+
+"""Hausdorff distance between point sets (columns), Euclidean point distance. A metric."""
+function hausdorff(A::AbstractMatrix, B::AbstractMatrix)
+    h(X, Y) = maximum(minimum(_pd(view(X, :, i), view(Y, :, j)) for j in axes(Y, 2)) for i in axes(X, 2))
+    max(h(A, B), h(B, A))
+end
+
+"""
+The 2015 ROS view distance `max(mean_i min_j ‖a_i − b_j‖², mean_j min_i ‖a_i − b_j‖²)`
+(race_feature_extraction/src/spin_image.cpp:252–312, view_clustering_utils.cpp:1957–1969).
+Not a metric.
+"""
+function ros_view_distance(A::AbstractMatrix, B::AbstractMatrix)
+    ab = sum(minimum(_sq(view(A, :, i), view(B, :, j)) for j in axes(B, 2)) for i in axes(A, 2)) / size(A, 2)
+    ba = sum(minimum(_sq(view(A, :, i), view(B, :, j)) for i in axes(A, 2)) for j in axes(B, 2)) / size(B, 2)
+    max(ab, ba)
+end

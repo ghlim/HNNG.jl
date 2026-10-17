@@ -6,4 +6,5 @@ using Test, HNNG
     include("invariants.jl")
     include("search.jl")
     include("updates.jl")
+    include("objects.jl")
 end
