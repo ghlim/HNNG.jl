@@ -24,7 +24,7 @@ include("io.jl")
 # Precompile workload: keeps spec §10's test-time budget and cuts first-call latency.
 if ccall(:jl_generating_output, Cint, ()) == 1
     let
-        for M in (Euclidean(), SqEuclidean(), CosineDist()), T in (Float32, Float64, Float16)
+        for M in (Euclidean(), SqEuclidean(), CosineDist()), T in (Float32, Float64)
             X = T[sin(0.7 * i + 1.3 * j) + cos(0.37 * i * j) for i in 1:4, j in 1:60]
             q = T[cos(0.5 * i) for i in 1:4]
             idx = HNNGIndex(M, 4; T=T)
@@ -37,6 +37,18 @@ if ccall(:jl_generating_output, Cint, ()) == 1
             verify(idx) || error("precompile workload: verify failed")
             stats(idx)
             b = HNNGIndex(M, 4; T=T)
+            bulk_add!(b, X)
+            verify(b) || error("precompile workload: verify failed")
+        end
+        # Float16 (accumulates in Float32): the common calls only; its getindex lanes are
+        # slow to compile, and the full loop above would add about 7 s of precompilation.
+        for M in (Euclidean(), CosineDist())
+            X = Float16[sin(0.7 * i + 1.3 * j) + cos(0.37 * i * j) for i in 1:4, j in 1:60]
+            idx = HNNGIndex(M, 4; T=Float16)
+            add!(idx, X)
+            knn(idx, X[:, 1], 3)
+            verify(idx) || error("precompile workload: verify failed")
+            b = HNNGIndex(M, 4; T=Float16)
             bulk_add!(b, X)
             verify(b) || error("precompile workload: verify failed")
         end
