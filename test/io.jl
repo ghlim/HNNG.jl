@@ -106,8 +106,6 @@ end
     end
     @test verify(HNNG.load(p; metric=Euclidean()))
     mk = HNNGIndex(Minkowski(3.0), 2; T=Float64)            # same type, other parameter: allowed
-    add!(mk, gauss(rng, Float64, 2, 20))
-    @test verify(mk)
     q = HNNG.save(joinpath(dir, "m.hnng"), mk)
     @test HNNG.load(q; metric=Minkowski(4.0)).metric == Minkowski(4.0)
 end

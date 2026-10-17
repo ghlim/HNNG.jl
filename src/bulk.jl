@@ -46,7 +46,7 @@ structure that streaming `add!(idx, X)` produces.
 bulk_add!(::HNNGIndex{<:ObjectStore}, X) =
     throw(ArgumentError("bulk_add! needs a VectorStore index; this index stores objects"))
 
-bulk_add!(idx::HNNGIndex{<:VectorStore}, X::AbstractMatrix{<:Real}) = _locked(() -> _bulk_add!(idx, X), idx)
+bulk_add!(idx::HNNGIndex{<:VectorStore}, X::AbstractMatrix{<:Real}) = @_locked idx _bulk_add!(idx, X)
 
 function _bulk_add!(idx::HNNGIndex{<:VectorStore}, X::AbstractMatrix{<:Real})
     _ntotal(idx) == 0 ||
@@ -63,9 +63,9 @@ function _bulk_add!(idx::HNNGIndex{<:VectorStore}, X::AbstractMatrix{<:Real})
 end
 
 """Return an index that never held an element to that state (after a failed `bulk_add!`)."""
-function _reset_empty!(idx::HNNGIndex{VectorStore{T}}) where {T}
+function _reset_empty!(@nospecialize(idx::HNNGIndex))
     disable_sigint() do
-        idx.store.data = Matrix{T}(undef, dim(idx.store), 0)
+        idx.store.data = similar(idx.store.data, dim(idx.store), 0)
         idx.store.n = 0
         empty!(idx.alive)
         idx.nlive = 0

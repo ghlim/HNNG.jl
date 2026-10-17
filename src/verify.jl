@@ -13,7 +13,7 @@ top; the live counter `nlive` behind `length`. Throws
 `ErrorException("HNNG.verify: ...")` naming the first violation.
 Distance evaluations made here are not counted. Assumes a symmetric distance.
 """
-verify(idx::HNNGIndex) = _locked(() -> _verify(idx), idx)
+verify(idx::HNNGIndex) = @_locked idx _verify(idx)
 
 function _verify(idx::HNNGIndex)
     n = _ntotal(idx)

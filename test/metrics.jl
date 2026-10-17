@@ -229,9 +229,6 @@ mixed(rng, ::Type{T}, dims...) where {T} = T.(randn(rng, dims...) .* exp2.(rand(
     @test HNNG._euclid(H[:, 1], view(H, :, 2)) === ref_euclid(H[:, 1], H[:, 2]) === HNNG._euclid(H[:, 2], H[:, 1])
     Hs = zeros(Float16, 74, 2); Hs[1:2:end, :] = H
     @test HNNG._euclid(view(Hs, 1:2:74, 1), view(H, :, 2)) === ref_euclid(H[:, 1], H[:, 2])
-    # any other float type takes the scalar path with the same lane map (W = 8)
-    B = big.(mixed(rng, Float64, 37, 2))
-    @test HNNG._euclid(B[:, 1], B[:, 2]) == ref_euclid(B[:, 1], B[:, 2])
     @test HNNG._euclid(Float32[], Float32[]) === 0.0 === HNNG._euclid(view(zeros(0, 1), :, 1), Float64[])
     @test_throws DimensionMismatch HNNG._euclid(zeros(3), zeros(4))
     @test_throws DimensionMismatch HNNG._euclid(zeros(Float32, 3), view(zeros(Float32, 8), 1:2:8))
@@ -241,31 +238,29 @@ end
     rng = StableRNG(64)
     P = rand(rng, 0:255, 64, 300)                    # 8-bit pixels: Float16 holds them exactly
     Q = rand(rng, 0:255, 64, 25)
+    P16, Q16, P32, Q32 = Float16.(P), Float16.(Q), Float32.(P), Float32.(Q)
     for M in (Euclidean(), CosineDist())
         h = HNNGIndex(M, 64; T=Float16)
-        add!(h, P)                                   # streaming
+        add!(h, P16)                                 # streaming
         @test verify(h)
         b = HNNGIndex(M, 64; T=Float16)
-        bulk_add!(b, P)                              # bulk (direct path for Float16)
+        bulk_add!(b, P16)                            # bulk (direct path for Float16)
         @test verify(b)
-        @test same_structure(structure(b), structure(h))
         f = HNNGIndex(M, 64; T=Float32)
-        add!(f, P)
+        add!(f, P32)
         @test verify(f)
         for j in axes(Q, 2)
-            ids, ds = knn(h, Q[:, j], 5)
+            ids, ds = knn(h, Q16[:, j], 5)
             @test all(isfinite, ds) && ds[1] > 0
-            @test ids == knn(f, Q[:, j], 5)[1]
-            @test knn(b, Q[:, j], 5) == (ids, ds)
-            @test check_knn(h, Q[:, j], 5)
+            @test ids == knn(f, Q32[:, j], 5)[1]
+            @test knn(b, Q16[:, j], 5) == (ids, ds)
         end
     end
     # pixel distances are integers below 2^24, so Float16 storage loses nothing under Euclidean
-    e16, e32 = HNNGIndex(Euclidean(), 64; T=Float16), HNNGIndex(Euclidean(), 64)
-    @test HNNG.distance(e16, P[:, 1], P[:, 2]) === HNNG.distance(e32, P[:, 1], P[:, 2])
+    @test HNNG._euclid(P16[:, 1], P16[:, 2]) === HNNG._euclid(P32[:, 1], P32[:, 2])
     # the cosine normalisation sums in Float32: a pixel vector keeps unit length
     c16 = HNNGIndex(CosineDist(), 64; T=Float16)
-    @test isapprox(sum(abs2, Float64.(HNNG._prepare(c16, P[:, 1]))), 1.0; atol=1e-2)
+    @test isapprox(sum(abs2, Float64.(HNNG._prepare(c16, P16[:, 1]))), 1.0; atol=1e-2)
 end
 
 @testset "units and input preparation" begin

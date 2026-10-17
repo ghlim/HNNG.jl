@@ -14,7 +14,7 @@ metric, the metric. An ObjectStore or a `UserMetric` index is saved without its 
 `load` then needs `metric=`. Holds the index lock; throws `ArgumentError` on an index
 invalidated by an exception in `add!`/`delete!`.
 """
-save(path::AbstractString, idx::HNNGIndex) = _locked(() -> _save(path, idx), idx)
+save(path::AbstractString, idx::HNNGIndex) = @_locked idx _save(path, idx)
 
 _live_store(s::VectorStore) = VectorStore(s.data[:, 1:s.n], s.n)
 _live_store(s::ObjectStore) = s

@@ -56,6 +56,18 @@ end
 
 using Distances: CorrDist
 
+"""
+`|a - b|` on `Float64` that counts its `calls`, throws `exc[]` on call `at[]` (0: never)
+and returns NaN when an argument equals `nanat[]` (NaN: never). Every call returns a
+closure of the same type, so the indexes of this file compile once.
+"""
+function tripwire()
+    calls, at, exc, nanat = Ref(0), Ref(0), Ref{Any}(ErrorException("tripwire")), Ref(NaN)
+    f(a, b) = (calls[] += 1; calls[] == at[] && throw(exc[]);
+               (a == nanat[] || b == nanat[]) ? NaN : abs(a - b))
+    (f=f, calls=calls, at=at, exc=exc, nanat=nanat)
+end
+
 @testset "a NaN distance throws ArgumentError and rolls back (I-2)" begin
     rng = StableRNG(120)
     X = randn(rng, 4, 30)
@@ -66,18 +78,16 @@ using Distances: CorrDist
     @test verify(idx)
     @test add!(idx, X[:, 8]) == 7                      # the rolled-back column got no id
     @test verify(idx)
+    q = randn(rng, 4)
+    r = knn(idx, q, 5)
     err = try add!(idx, X[:, 7]); nothing catch e; e end
     @test err isa ArgumentError && occursin("is NaN", err.msg) && occursin("ids 8 and", err.msg)
     @test length(idx) == 7 && verify(idx)
+    @test knn(idx, q, 5) == r                          # the failed add! changed nothing
     # a query whose distance is NaN
     @test_throws ArgumentError knn(idx, ones(4), 3)
     @test_throws "the query and id" knn(idx, ones(4), 3)
-    @test_throws ArgumentError HNNG.knn_counted(idx, ones(4), 3)
-    @test_throws ArgumentError HNNG.knn_levelsync(idx, ones(4), 3)
-    @test_throws ArgumentError knn_batch(idx, ones(4, 2), 3)
-    @test_throws ArgumentError knn_batch(idx, ones(4, 2), 3; threads=true)
-    q = randn(rng, 4)
-    @test check_knn(idx, q, 5) && verify(idx)         # the index is untouched
+    @test knn(idx, q, 5) == r && verify(idx)          # the index is untouched
     # bulk_add! resets the index to the empty state
     b = HNNGIndex(CorrDist(), 4; T=Float64)
     @test_throws ArgumentError bulk_add!(b, X)
@@ -86,24 +96,24 @@ using Distances: CorrDist
     @test bulk_add!(b, X[:, 1:6]) == 1:6
     @test verify(b)
     # a UserMetric that returns NaN
-    f(a, b) = (a == 3.0 || b == 3.0) ? NaN : abs(a - b)
-    o = HNNGIndex(UserMetric(f; is_metric=true), Float64)
+    tw = tripwire()
+    tw.nanat[] = 3.0
+    o = HNNGIndex(UserMetric(tw.f; is_metric=true), Float64)
     @test add!(o, [1.0, 2.0]) == 1:2
     @test verify(o)
     @test_throws ArgumentError add!(o, 3.0)
     @test length(o) == 2 && HNNG._ntotal(o) == 2 && verify(o)
     @test_throws "the query and id" knn(o, 3.0, 1)
+    @test_throws ArgumentError HNNG.knn_counted(o, 3.0, 1)
+    @test_throws ArgumentError HNNG.knn_levelsync(o, 3.0, 1)
+    @test_throws ArgumentError knn_batch(o, [1.5, 3.0], 1)
+    @test_throws ArgumentError knn_batch(o, [1.5, 3.0], 1; threads=true)   # rethrown from a task
+    @test verify(o)
     @test add!(o, [10.0, 11.0]) == 3:4
     @test verify(o)
     @test knn(o, 2.9, 2) == ([2, 1], [0.8999999999999999, 1.9])
 end
 
-"""A `Float64` metric `|a - b|` that counts its calls and throws on call `at[]` (0: never)."""
-function tripwire(; err=() -> error("tripwire"))
-    calls, at = Ref(0), Ref(0)
-    f(a, b) = (calls[] += 1; calls[] == at[] && throw(err()); abs(a - b))
-    f, calls, at
-end
 
 const INVALID = "index is invalid after an exception in add!/delete!/bulk_add!"
 
@@ -128,7 +138,8 @@ const INVALID = "index is invalid after an exception in add!/delete!/bulk_add!"
     @test length(idx) == 31 && HNNG._ntotal(idx) == 32 && verify(idx)
     @test check_knn(idx, q, 7)
     # InterruptException (Ctrl-C) is handled the same way
-    f, calls, at = tripwire(err=() -> InterruptException())
+    (; f, calls, at, exc) = tripwire()
+    exc[] = InterruptException()
     v = HNNGIndex(UserMetric(f; is_metric=true), Float64)
     add!(v, collect(1.0:20.0))
     @test verify(v)
@@ -139,9 +150,9 @@ const INVALID = "index is invalid after an exception in add!/delete!/bulk_add!"
     @test add!(v, 7.5) == 21
     @test verify(v)
     # the first element: a level 0 is created; rolled back to no levels
-    g, gcalls, gat = tripwire()
-    w = HNNGIndex(UserMetric(g; is_metric=true), Float64)
-    gat[] = 1
+    tw = tripwire()
+    w = HNNGIndex(UserMetric(tw.f; is_metric=true), Float64)
+    tw.at[] = 1
     @test_throws "tripwire" add!(w, [1.0, 2.0])                 # element 1 needs no distance
     @test length(w) == 1 && nlevels(w) == 1 && verify(w)
 end
@@ -150,7 +161,7 @@ end
     rng = StableRNG(131)
     X = 10 .* randn(rng, 60)
     x = 0.123
-    f, calls, at = tripwire()
+    (; f, calls, at) = tripwire()
     build() = (i = HNNGIndex(UserMetric(f; is_metric=true), Float64); add!(i, X); verify(i); i)
     # count the evaluations of the level-0 search for x and of the whole insertion
     dry = build()
@@ -197,7 +208,7 @@ end
 @testset "an exception in delete!: rolled back in the level-0 re-search, else invalid (I-3)" begin
     rng = StableRNG(132)
     X = 10 .* randn(rng, 60)
-    f, calls, at = tripwire()
+    (; f, calls, at) = tripwire()
     build() = (i = HNNGIndex(UserMetric(f; is_metric=true), Float64); add!(i, X); verify(i); i)
     # an id with inlinkers re-searches its inlinkers before any write: rolled back
     idx = build()

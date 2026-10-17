@@ -72,7 +72,7 @@ Holds the index lock for its whole duration: `knn` calls on one index from sever
 threads (for example inside `Threads.@threads`) are serialized, correct but not
 parallel. Use `knn_batch(idx, Q, k; threads=true)` for parallel queries.
 """
-knn(idx::HNNGIndex, q, k::Integer) = _locked(() -> _knn(idx, q, k), idx)
+knn(idx::HNNGIndex, q, k::Integer) = @_locked idx _knn(idx, q, k)
 
 function _knn(idx::HNNGIndex, q, k::Integer)
     _check_k(k)
@@ -88,7 +88,7 @@ end
 fraction evaluated is that number divided by `length(idx)`). Holds the index lock,
 like `knn`.
 """
-knn_counted(idx::HNNGIndex, q, k::Integer) = _locked(() -> _knn_counted(idx, q, k), idx)
+knn_counted(idx::HNNGIndex, q, k::Integer) = @_locked idx _knn_counted(idx, q, k)
 
 function _knn_counted(idx::HNNGIndex, q, k::Integer)
     _check_k(k)
@@ -111,7 +111,7 @@ clusters whose bound exceeds the k-th distance, descend into the survivors' chil
 at level 0 evaluate the survivors' members. A second oracle for the tests only.
 Holds the index lock, like `knn`.
 """
-knn_levelsync(idx::HNNGIndex, q, k::Integer) = _locked(() -> _knn_levelsync(idx, q, k), idx)
+knn_levelsync(idx::HNNGIndex, q, k::Integer) = @_locked idx _knn_levelsync(idx, q, k)
 
 function _knn_levelsync(idx::HNNGIndex, q, k::Integer)
     _check_k(k)
@@ -181,7 +181,7 @@ threads at once, so a `UserMetric` must be thread-safe. If a task throws, the fi
 exception is rethrown after all tasks have finished.
 """
 knn_batch(idx::HNNGIndex, Q, k::Integer; threads::Bool=false) =
-    _locked(() -> _knn_batch(idx, Q, k, threads), idx)
+    @_locked idx _knn_batch(idx, Q, k, threads)
 
 """
     _wait_all(tasks) -> first exception or nothing

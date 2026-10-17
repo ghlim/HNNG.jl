@@ -209,20 +209,25 @@ const INVALID_MSG = "index is invalid after an exception in add!/delete!/bulk_ad
 @inline _check_valid(idx::HNNGIndex) = idx.invalid ? throw(ArgumentError(INVALID_MSG)) : nothing
 
 """
-    _locked(f, idx)
+    @_locked idx expr
 
-Run `f()` holding `idx.lock`, after `_check_valid`. Every public call that touches the
-shared query buffers `idx.memo` and the counter `idx.nevals`, or mutates, verifies or
-saves the index, runs inside: calls on one index are serialized (correct, not
-parallel). The lock is reentrant, so a locked call may call another public function.
+Evaluate `expr` holding `idx.lock`, after `_check_valid(idx)`. Every public call that
+touches the shared query buffers `idx.memo` and the counter `idx.nevals`, or mutates,
+verifies or saves the index, runs inside: calls on one index are serialized (correct,
+not parallel). The lock is reentrant, so a locked call may call another public
+function. A macro rather than a function taking a closure, so each public method
+compiles to one body (lock, try, finally unlock) with no extra closure specialization.
 """
-@inline function _locked(f::F, idx::HNNGIndex) where {F}
-    lock(idx.lock)
-    try
-        _check_valid(idx)
-        f()
-    finally
-        unlock(idx.lock)
+macro _locked(idx, expr)
+    quote
+        local ix = $(esc(idx))
+        lock(ix.lock)
+        try
+            _check_valid(ix)
+            $(esc(expr))
+        finally
+            unlock(ix.lock)
+        end
     end
 end
 

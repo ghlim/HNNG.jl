@@ -28,17 +28,21 @@ function _relink_search(idx::HNNGIndex, e::Int, l::Int, floating::Vector{Int})
 end
 
 """
-    unlink!(idx, e, l, floating, found=nothing) -> (removed, added)
+    unlink!(idx, e, l, floating[, relinks]) -> (removed, added)
 
 Remove `e` from the level-`l` population: every inlinker re-finds its nearest
 neighbour with `e` excluded (no rewire sweep is needed), then `e`'s former cluster
-and the clusters the inlinkers now point into are repaired. `found` is
-`_relink_search(idx, e, l, floating)` made just before; `nothing` searches here.
+and the clusters the inlinkers now point into are repaired. `relinks` is
+`_relink_search(idx, e, l, floating)` made just before; the 4-argument form searches
+first.
 """
-function unlink!(idx::HNNGIndex, e::Int, l::Int, floating::Vector{Int}, found=nothing)
+unlink!(idx::HNNGIndex, e::Int, l::Int, floating::Vector{Int}) =
+    unlink!(idx, e, l, floating, _relink_search(idx, e, l, floating))
+
+function unlink!(idx::HNNGIndex, e::Int, l::Int, floating::Vector{Int},
+                 relinks::Vector{Tuple{Int,Float64}})
     lv = idx.levels[l+1]
     lv.present[e] || error("HNNG internal error: $e is not present at level $l")
-    relinks = found === nothing ? _relink_search(idx, e, l, floating) : found
     affected = [lv.cluster_of[e]]
     old = lv.outlink[e]
     old == 0 || _remove_sorted!(lv.inlinks[old], e)
@@ -65,6 +69,15 @@ function unlink!(idx::HNNGIndex, e::Int, l::Int, floating::Vector{Int}, found=no
     _repair!(idx, l, affected, Int[], e, floating)
 end
 
+"""Cold path of a rolled-back `delete!`: restore `last_update_stats` and count the evaluations made."""
+function _restore_stats!(@nospecialize(idx::HNNGIndex), rew0::Int, top0::Int)
+    disable_sigint() do
+        idx.last_rewired, idx.last_top = rew0, top0
+        _flush!(idx)
+    end
+    nothing
+end
+
 """
     delete!(idx, id) -> idx
 
@@ -77,7 +90,7 @@ exception there (a metric that throws or returns NaN, an `InterruptException`, â
 leaves the index exactly as before, `id` still live; an exception after it marks the
 index invalid, as for `add!`. The exception is always rethrown.
 """
-Base.delete!(idx::HNNGIndex, id::Integer) = _locked(() -> _delete!(idx, id), idx)
+Base.delete!(idx::HNNGIndex, id::Integer) = @_locked idx _delete!(idx, id)
 
 function _delete!(idx::HNNGIndex, id::Integer)
     i = _check_live(idx, id)
@@ -102,10 +115,7 @@ function _delete!(idx::HNNGIndex, id::Integer)
         _flush!(idx)
     catch
         if phase == 0
-            disable_sigint() do
-                idx.last_rewired, idx.last_top = rew0, top0
-                _flush!(idx)
-            end
+            _restore_stats!(idx, rew0, top0)
         elseif phase == 1
             idx.invalid = true
         end

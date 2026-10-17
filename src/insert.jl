@@ -296,23 +296,39 @@ function _repair!(idx::HNNGIndex, l::Int, affected::Vector{Int}, extra::Vector{I
 end
 
 """
-    link!(idx, e, l, floating, found=nothing) -> (removed, added)
+    _link_search(idx, e, l, floating) -> (nn, nnd, cands)
+
+The search half of `link!`: `_nn_search` for `e` at level `l` with rewire candidates,
+or `(0, Inf, Int[])` when the level is empty. Writes nothing but `idx.memo`, and reads
+nothing `link!` writes (the new element is in no cluster yet), so running it first
+gives the same result and evaluations.
+"""
+function _link_search(idx::HNNGIndex, e::Int, l::Int, floating::Vector{Int})
+    idx.levels[l+1].npop == 0 && return (0, Inf, Int[])
+    _nn_search(idx, _point(idx.store, e), l, e, 0, floating, true)
+end
+
+"""
+    link!(idx, e, l, floating[, found]) -> (removed, added)
 
 Add `e` to the level-`l` population (spec §6.3): outlink to its exact nearest
 neighbour, rewire every element `x` with `(M(x, e), e) < (outdist(x), outlink(x))`,
 repair the touched clusters, refresh ancestors, return the representative delta.
-`found` is the result of `_nn_search(idx, e's point, l, e, 0, floating, true)` made
-just before (the memo must still hold its distances); `nothing` searches here.
+`found` is `_link_search(idx, e, l, floating)` made just before (the memo must still
+hold its distances); the 4-argument form searches first.
 """
-function link!(idx::HNNGIndex, e::Int, l::Int, floating::Vector{Int}, found=nothing)
+link!(idx::HNNGIndex, e::Int, l::Int, floating::Vector{Int}) =
+    link!(idx, e, l, floating, _link_search(idx, e, l, floating))
+
+function link!(idx::HNNGIndex, e::Int, l::Int, floating::Vector{Int},
+               found::Tuple{Int,Float64,Vector{Int}})
     lv = idx.levels[l+1]
     lv.present[e] && error("HNNG internal error: $e is already present at level $l")
     lv.present[e] = true
     lv.npop += 1
     affected = Int[]
     if lv.npop >= 2
-        nn, nnd, cands = found === nothing ?
-            _nn_search(idx, _point(idx.store, e), l, e, 0, floating, true) : found
+        nn, nnd, cands = found
         nn == 0 && error("HNNG internal error: no neighbour found for $e at level $l")
         val = idx.memo.val
         lv.outlink[e] = nn
@@ -417,8 +433,7 @@ function _insert!(idx::HNNGIndex, v)
         end
         isempty(idx.levels) && push!(idx.levels, Level(id))
         floating = Int[]
-        found = idx.levels[1].npop == 0 ? nothing :
-            _nn_search(idx, _point(idx.store, id), 0, id, 0, floating, true)
+        found = _link_search(idx, id, 0, floating)
         phase = 1
         propagate!(idx, link!(idx, id, 0, floating, found)..., 1)
         phase = 2
@@ -437,22 +452,34 @@ end
 _truncate!(s::VectorStore, n::Int) = (s.n = n; s)
 _truncate!(s::ObjectStore, n::Int) = (resize!(s.objs, n); s)
 
-"""Undo the bookkeeping of an `_insert!` that wrote nothing structural."""
-function _rollback_insert!(idx::HNNGIndex, n0::Int, nlive0::Int, nl0::Int, rew0::Int, top0::Int)
+"""
+Undo the bookkeeping of an `_insert!` that wrote nothing structural. A cold path:
+`@nospecialize` compiles it once for every index type.
+"""
+function _rollback_insert!(@nospecialize(idx::HNNGIndex), n0::Int, nlive0::Int, nl0::Int,
+                           rew0::Int, top0::Int)
     disable_sigint() do
         _truncate!(idx.store, n0)
         resize!(idx.alive, n0)
         idx.nlive = nlive0
-        resize!(idx.levels, nl0)             # drops the level 0 created for a first element
-        for lv in idx.levels
-            for v in (lv.outlink, lv.outdist, lv.inlinks, lv.present, lv.cluster_of)
-                length(v) > n0 && resize!(v, n0)
-            end
-        end
+        _shrink_levels!(idx.levels, nl0, n0)
         idx.last_rewired, idx.last_top = rew0, top0
         _flush!(idx)
     end
     nothing
+end
+
+"""Keep the first `nl` levels and the first `n` ids of each (drops a level 0 created for a first element)."""
+function _shrink_levels!(levels::Vector{Level}, nl::Int, n::Int)
+    resize!(levels, nl)
+    for lv in levels
+        length(lv.outlink) > n && resize!(lv.outlink, n)
+        length(lv.outdist) > n && resize!(lv.outdist, n)
+        length(lv.inlinks) > n && resize!(lv.inlinks, n)
+        length(lv.present) > n && resize!(lv.present, n)
+        length(lv.cluster_of) > n && resize!(lv.cluster_of, n)
+    end
+    levels
 end
 
 """
@@ -474,7 +501,7 @@ throws `ArgumentError`; rebuild it or load a saved copy. A matrix or vector of o
 is inserted one element at a time: the elements before the failing one stay inserted.
 """
 add!(idx::HNNGIndex{<:VectorStore}, x::AbstractVector{<:Real}) =
-    _locked(() -> _insert!(idx, _prepare(idx, x)), idx)
+    @_locked idx _insert!(idx, _prepare(idx, x))
 
 """Throw `ArgumentError` unless the matrix `X` has one row per index dimension."""
 function _check_dim(idx::HNNGIndex{<:VectorStore}, X::AbstractMatrix)
@@ -484,7 +511,7 @@ function _check_dim(idx::HNNGIndex{<:VectorStore}, X::AbstractMatrix)
     nothing
 end
 
-add!(idx::HNNGIndex{<:VectorStore}, X::AbstractMatrix{<:Real}) = _locked(() -> _add_cols!(idx, X), idx)
+add!(idx::HNNGIndex{<:VectorStore}, X::AbstractMatrix{<:Real}) = @_locked idx _add_cols!(idx, X)
 
 function _add_cols!(idx::HNNGIndex{<:VectorStore}, X::AbstractMatrix{<:Real})
     _check_dim(idx, X)
@@ -496,10 +523,10 @@ function _add_cols!(idx::HNNGIndex{<:VectorStore}, X::AbstractMatrix{<:Real})
     first:_ntotal(idx)
 end
 
-add!(idx::HNNGIndex{ObjectStore{E}}, obj::E) where {E} = _locked(() -> _insert!(idx, obj), idx)
+add!(idx::HNNGIndex{ObjectStore{E}}, obj::E) where {E} = @_locked idx _insert!(idx, obj)
 
 add!(idx::HNNGIndex{ObjectStore{E}}, objs::AbstractVector{<:E}) where {E} =
-    _locked(() -> _add_objs!(idx, objs), idx)
+    @_locked idx _add_objs!(idx, objs)
 
 function _add_objs!(idx::HNNGIndex{ObjectStore{E}}, objs::AbstractVector{<:E}) where {E}
     first = _ntotal(idx) + 1
