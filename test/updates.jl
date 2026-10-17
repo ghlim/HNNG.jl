@@ -106,3 +106,64 @@ end
     stream!(idx, X)
     @test same_structure(structure(idx, vcat(1:90, 1:90)), ref)
 end
+
+@testset "length and stats" begin
+    rng = StableRNG(18)
+    idx = HNNGIndex(Euclidean(), 2; T=Float64)
+    @test stats(idx) == (n_live=0, n_total=0, nlevels=0, population=Int[], nclusters=Int[],
+                         mean_cluster_size=Float64[], nevals=0)
+    stream!(idx, blobs(rng, Float64, 2, 200))
+    for id in 1:10
+        delete!(idx, id); verify(idx)
+    end
+    s = stats(idx)
+    @test s.n_live == 190 == length(idx) && s.n_total == 200 && s.nlevels == nlevels(idx)
+    @test s.population[1] == 190
+    @test all(s.population[l+1] == s.nclusters[l] for l in 1:s.nlevels-1)
+    @test s.nclusters[end] == 1
+    @test s.mean_cluster_size ≈ s.population ./ s.nclusters
+    @test s.nevals == idx.nevals > 0
+    @test reset_evals!(idx) === idx && stats(idx).nevals == 0
+    knn(idx, [0.0, 0.0], 3)
+    @test stats(idx).nevals > 0
+end
+
+@testset "HNNG.last_update_stats" begin
+    snapshot(idx) = [(copy(lv.outlink), sort!([(c.rep, copy(c.members)) for c in lv.clusters if c.rep != 0]))
+                     for lv in idx.levels]
+    function differs(a, b)
+        (oa, ca), (ob, cb) = a, b
+        m = min(length(oa), length(ob))
+        oa[1:m] != ob[1:m] || any(!=(0), oa[m+1:end]) || any(!=(0), ob[m+1:end]) || ca != cb
+    end
+    function touched(a, b)
+        top = 0
+        for l in 0:max(length(a), length(b))-1
+            (l >= length(a) || l >= length(b) || differs(a[l+1], b[l+1])) && (top = l)
+        end
+        top
+    end
+    rng = StableRNG(183)
+    idx = HNNGIndex(Euclidean(), 2; T=Float64)
+    @test HNNG.last_update_stats(idx) == (rewired=0, top_level_touched=0)
+    X = blobs(rng, Float64, 2, 120)
+    for j in 1:120
+        before = snapshot(idx)
+        add!(idx, X[:, j])
+        @test verify(idx)
+        after = snapshot(idx)
+        st = HNNG.last_update_stats(idx)
+        @test st.rewired == (j == 1 ? 0 : count(i -> before[1][1][i] != after[1][1][i], 1:j-1))
+        @test st.top_level_touched == touched(before, after)
+    end
+    for id in randperm(rng, 120)
+        before = snapshot(idx)
+        delete!(idx, id)
+        @test verify(idx)
+        after = snapshot(idx)
+        st = HNNG.last_update_stats(idx)
+        @test st.rewired == (isempty(after) ? count(i -> i != id && before[1][1][i] != 0, 1:120) :
+                             count(i -> i != id && before[1][1][i] != after[1][1][i], 1:120))
+        @test st.top_level_touched == touched(before, after)
+    end
+end

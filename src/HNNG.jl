@@ -5,7 +5,7 @@ using DataStructures: heappush!, heappop!
 using Serialization: serialize, deserialize
 
 export HNNGIndex, UserMetric, Euclidean, SqEuclidean, CosineDist
-export is_metric, nlevels, element, verify, add!, knn, knn_batch
+export is_metric, nlevels, element, verify, add!, knn, knn_batch, stats, reset_evals!
 export outlink, outlink_distance, inlinks, cluster, members, representative, radius,
        children, path_to_root, leaves, root, newick, level_graph
 
