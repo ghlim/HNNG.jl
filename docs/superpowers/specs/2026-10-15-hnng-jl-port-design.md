@@ -120,7 +120,7 @@ nlevels(idx)       # number of levels (0 for an empty index)
 stats(idx)         # NamedTuple, see §4.3
 verify(idx)        # throws on the first violated invariant, returns true
 
-save(path, idx); load(path; metric=nothing)
+save(path, idx); load(path; metric=nothing)   # called as HNNG.save / HNNG.load; not exported
 ```
 
 ### 4.1 Ids, elements, order
@@ -130,8 +130,11 @@ deleted id stays a tombstone: `element(idx, id)` and navigation calls throw
 `ArgumentError`, `knn` never returns it, and `length` excludes it. Column
 storage for deleted elements is kept (no compaction in this version).
 
-`knn` returns ids sorted by ascending distance, ties by ascending id. With
-fewer than `k` live elements it returns all of them. `knn` on an empty index
+`knn` returns ids sorted by ascending distance, ties by ascending id. Ties are
+resolved in the index's internal Euclidean units (the units in which the k-th
+element is selected); after conversion to SqEuclidean or CosineDist units two
+distinct internal distances can print equal, and such a pair keeps its internal
+order. With fewer than `k` live elements it returns all of them. `knn` on an empty index
 returns two empty vectors. `k < 1` throws. `knn_batch` returns `k × nq`
 matrices (one column per query), padded with id `0` and distance `Inf` when
 fewer than `k` results exist.

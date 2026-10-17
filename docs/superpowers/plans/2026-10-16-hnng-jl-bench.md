@@ -2911,3 +2911,10 @@ Expected: `smoke=false`, `threads=1`, `blas_threads=1`, `cpus_allowed=2`, the go
 git add bench/results
 git commit -m "bench: full benchmark results (CSV, env.txt, tex, figures)" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
+
+**Release checklist (author).** These are the author's actions, not an agent's, done once the results commit above exists; there is no code:
+
+- [ ] Tag `v0.1.0` on the commit that holds the frozen `bench/results`.
+- [ ] Publish the GitHub release for that tag.
+- [ ] Archive the release on Zenodo.
+- [ ] Paste the Zenodo DOI and the repository URL into the manuscript's `%% AUTHOR DECISION` markers.

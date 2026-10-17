@@ -8,7 +8,7 @@
 
 **Tech Stack:** Julia 1.13.x (stable) and 1.10.x (LTS) via juliaup; Distances.jl, DataStructures.jl, LinearAlgebra (BLAS), Serialization; Graphs.jl + SparseArrays as a package extension; Test, StableRNGs, JSON3, HDF5 (slow tests), Base64, Random for tests; Python 3.12 + h5py + the existing `hnnglib` bindings for the one-time C++ parity fixture.
 
-**Spec:** `/home/coral/working/HNNG.jl/docs/superpowers/specs/2026-10-15-hnng-jl-port-design.md` (sections 3 to 10 and 12). The benchmark harness `bench/` and `test/recall_rule.jl` are covered by the sibling plan `docs/superpowers/plans/2026-10-16-hnng-jl-bench.md`.
+**Spec:** `/home/coral/working/HNNG.jl/docs/superpowers/specs/2026-10-15-hnng-jl-port-design.md` (sections 3 to 10 and 12). The benchmark harness `bench/` is covered by the sibling plan `docs/superpowers/plans/2026-10-16-hnng-jl-bench.md`; the recall rule is tested there, in `bench/test/runtests.jl` (spec §10), not in this package's `test/`. Tagging v0.1.0, the GitHub release and the Zenodo DOI are author actions after the benchmark plan's Task 12 freezes bench/results; they are listed as a checklist at the end of that task.
 
 ## Global Constraints
 
@@ -29,7 +29,7 @@
 
 1. **Exact duplicate points** (distance-0 ties) inserted, queried and deleted one copy at a time: the structure verifies after every step, `knn` returns the copies in ascending id order, and deleting one copy leaves the others findable. Pinned in Task 8 (search) and Task 13 (deletes).
 2. **Integer-lattice data with massive distance ties**: `verify` passes and `knn` equals the oracle id-for-id with smallest-id tiebreaks. Pinned in Task 8.
-3. **Non-`Float32` input on the default `Float32` index** (`Int` and `Float16` vectors, `Float64` matrices, views, row slices, `Int` queries): converted to `T`, stored and queried like `Float32` input, never a `MethodError`. Pinned in Task 5 (`add!`) and Task 8 (`knn` with an `Int` query).
+3. **Non-`Float32` input on the default `Float32` index** (`Int` and `Float16` vectors, `Float64` matrices, views, row slices, `Int` queries): converted to `T`, stored and queried like `Float32` input, never a `MethodError`. Pinned in Task 5 (`add!`) and Task 8 (testset "knn basics": an `Int` query on a fresh default `HNNGIndex(Euclidean(), 3)`).
 4. **The zero vector under `CosineDist`**: stored as the zero vector (no `NaN`), at cosine distance 0.5 from every non-zero vector, usable as a query. Pinned in Task 3 and Task 8.
 5. **A `UserMetric` that returns an `Int`** (Hamming distance on strings in an `ObjectStore`, `is_metric=true`): distances widen to `Float64`, the many ties go to the smallest id, results are exact. Pinned in Task 11.
 
@@ -50,7 +50,7 @@ Assumptions 1, 2, 7 and 8, and the dimension-aware guard of assumption 4, have b
 11. **Cosine zero vector.** Normalisation is `x / (‖x‖ + 1e-30)` like the C++ bindings, so a zero vector stays zero.
 12. **Test file layout.** `test/oracle.jl` holds the brute-force oracle and shared helpers only; the spec's oracle grid lives in `test/search.jl`; `test/metrics.jl`, `test/errors.jl`, `test/slow.jl` and `test/recipes.jl` are added to the spec's list.
 13. **C++ parity counts.** The bindings expose no level or cluster getters, so the fixture script reads `maxlevel` and the per-level cluster counts from the C++ `save_index` file (format in the brief §7, `hnnalg.h:2471-2526`). The id gate compares sorted id sets (C++ labels + 1).
-14. **Internal layout.** `VectorStore` is a `mutable struct` (capacity doubling); `HNNGIndex` gains `last_rewired` and `last_top` (read by the unexported `HNNG.last_update_stats`, requested by the benchmark plan for Exp.3); `Level` gains `free`, `npop`, `nclusters`; `DistMemo` carries the reusable heap buffers; `save`/`load` use `Serialization` of a tagged `NamedTuple`, store the metric only for a `VectorStore` with a Distances metric, and do not persist `nevals`. `HNNGIndex(metric, dim)` with `dim < 1` throws `ArgumentError`.
+14. **Internal layout.** `VectorStore` is a `mutable struct` (capacity doubling); `HNNGIndex` gains `nlive` (the live-element counter behind an O(1) `length(idx)`: maintained by `add!`, `delete!` and `bulk_add!`, checked by `verify`, not saved, recomputed as `count(alive)` by `load`), `last_rewired` and `last_top` (read by the unexported `HNNG.last_update_stats`, requested by the benchmark plan for Exp.3); `Level` gains `free`, `npop`, `nclusters`; `DistMemo` carries the reusable heap buffers; `save`/`load` use `Serialization` of a tagged `NamedTuple`, store the metric only for a `VectorStore` with a Distances metric, and do not persist `nevals` or `nlive`. `HNNGIndex(metric, dim)` with `dim < 1` throws `ArgumentError`.
 15. **Graphs extension loading.** `SparseArrays` sits in `[weakdeps]` next to `Graphs` and the extension triggers on `"Graphs"` alone (extensions may load their parent's weak deps; `Graphs` itself loads `SparseArrays`).
 16. **`verify`** assumes a symmetric distance (the 1-NN check recomputes `d(x, y)`); it throws `ErrorException("HNNG.verify: ...")`, which is not one of the §9 user errors.
 
@@ -61,7 +61,7 @@ Assumptions 1, 2, 7 and 8, and the dimension-aware guard of assumption 4, have b
 - **Cluster slots:** a freed slot gets `rep = 0` and goes on `Level.free`; new clusters pop from `free` (last in, first out) or append. Cluster indices are valid only between mutations.
 - **Components:** breadth-first search over outlinks and inlinks (`_component`), in the local repair and in the bulk loader; it yields the same components as the union-find of spec §6.6.
 - **Descent frontier order inside `link!`/`unlink!`:** min-heap on `(LB, level, cluster index)`; the skip test runs at push and again at pop; level-`l` clusters reached twice in one pass are expanded once (the representative's `mark`).
-- **Internal names used across tasks:** `_point`, `_append!`, `_ntotal`, `dim`, `_default_guard`, `_grow!`, `_begin!`, `_euclid`, `_rawdist`, `_to_user`, `_prepare`, `_normalize!`, `_d`, `_mdist`, `_flush!`, `_better`, `_insum`, `_elect`, `_component`, `_insert_sorted!`, `_remove_sorted!`, `_scan_level`, `_nn_search`, `_lb`, `_skip`, `_push_cluster!`, `_repdist`, `_bounds!`, `_new_slot!`, `_free_slot!`, `_refresh_up!`, `_repair!`, `link!`, `unlink!`, `_compose!`, `propagate!`, `_insert!`, `_knn!`, `_offer!`, `_sorted_results`, `_check_live`, `_check_level`, `_cl`, `_verify_level`, `_verify_top`, `_fresh_bounds`, `_rep_mask`, `_fail`, `_components`, `_allpairs_nn`, `_allpairs_nn_direct`, `_allpairs_nn_blas`, `last_update_stats`. Constants: `GUARD = 1e-6`, `FWD`, `REV`, `BULK_TILE = 512`, `RERANK = 1e-5`, `FORMAT`, `FORMAT_VERSION`.
+- **Internal names used across tasks:** `_point`, `_append!`, `_ntotal`, `dim`, `_default_guard`, `_grow!`, `_begin!`, `_euclid`, `_rawdist`, `_to_user`, `_prepare`, `_normalize!`, `_d`, `_mdist`, `_flush!`, `_better`, `_insum`, `_elect`, `_component`, `_insert_sorted!`, `_remove_sorted!`, `_scan_level`, `_nn_search`, `_lb`, `_skip`, `_push_cluster!`, `_repdist`, `_bounds!`, `_new_slot!`, `_free_slot!`, `_refresh_up!`, `_repair!`, `link!`, `unlink!`, `_compose!`, `propagate!`, `_insert!`, `_knn!`, `_offer!`, `_sorted_results`, `_check_live`, `_check_level`, `_cl`, `_verify_level`, `_verify_top`, `_verify_nlive`, `_fresh_bounds`, `_rep_mask`, `_fail`, `_components`, `_allpairs_nn`, `_allpairs_nn_direct`, `_allpairs_nn_blas`, `last_update_stats`. Constants: `GUARD = 1e-6`, `FWD`, `REV`, `BULK_TILE = 512`, `RERANK = 1e-5`, `FORMAT`, `FORMAT_VERSION`.
 
 ## File structure
 
@@ -98,7 +98,7 @@ Assumptions 1, 2, 7 and 8, and the dimension-aware guard of assumption 4, have b
 
 Layer order: (a) Tasks 1–3, (b) Task 4, (c) Task 5, (d) Tasks 6–7, (e) Tasks 8–9, (f) Task 10, (g) Tasks 11–13, (h) Tasks 14–16, (i) Tasks 17–18, (j) Tasks 19–20, (k) Tasks 21–22, (l) Task 23, slow runs Task 24, (m) Task 25. `unlink!` lands in layer (d) rather than (f) because an insert that merges two clusters removes a representative, so insert-only propagation already needs it; layer (f) adds the public `delete!`.
 
-**Run commands used throughout.** Full suite: `julia --project=. -e 'using Pkg; Pkg.test()'`. Single file: `julia --project=. -e 'using Test, HNNG; include("test/<file>.jl")'` (the test packages are also installed in the default environment in Task 1, which Julia stacks on the load path). Every test file from Task 4 on starts with `isdefined(@__MODULE__, :brute_knn) || include(joinpath(@__DIR__, "oracle.jl"))`, so it runs alone or from `runtests.jl`.
+**Run commands used throughout.** Full suite: `julia --project=. -e 'using Pkg; Pkg.test()'`. Single file: `julia --project=. -e 'using Test, HNNG; include("test/<file>.jl")'` (the test packages are also installed in the default environment in Task 1, which Julia stacks on the load path). If `Manifest.toml` is missing, run `julia --project=. -e 'using Pkg; Pkg.instantiate()'` first. Every test file from Task 4 on starts with `isdefined(@__MODULE__, :brute_knn) || include(joinpath(@__DIR__, "oracle.jl"))`, so it runs alone or from `runtests.jl`.
 
 ---
 
@@ -109,7 +109,7 @@ Layer order: (a) Tasks 1–3, (b) Task 4, (c) Task 5, (d) Tasks 6–7, (e) Tasks
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: a loadable empty module `HNNG`; the test target `[extras]`/`[targets]`; `julia` (stable 1.13.x) and `julia +lts` (1.10.x) on `PATH`; StableRNGs, JSON3 and Graphs in the default environment for single-file runs; repo-local git identity.
+- Produces: a loadable empty module `HNNG`; the test target `[extras]`/`[targets]`; `julia` (stable 1.13.x) and `julia +lts` (1.10.x) on `PATH`; StableRNGs, JSON3 and Graphs in the default environment for single-file runs; a root `Manifest.toml` resolved on stable (ignored by git, kept for single-file runs); repo-local git identity.
 
 - [ ] **Step 1: Install Julia through juliaup at user level**
 
@@ -208,9 +208,9 @@ using HNNG, Graphs
 end # module
 ```
 
-`.gitignore`:
+`.gitignore` (the manifest pattern is root-only because `bench/Manifest.toml` is committed as the pin for the paper numbers):
 ```
-Manifest.toml
+/Manifest.toml
 Manifest-v*.toml
 /test/fixtures/__pycache__/
 ```
@@ -238,22 +238,23 @@ julia -e 'using Pkg; Pkg.add(["StableRNGs", "JSON3", "Graphs"])'
 
 Expected: `Updating ~/.julia/environments/v1.13/Project.toml` listing the three packages. `julia --project=.` stacks this environment on the load path, so `using StableRNGs` works in single-file runs; `Pkg.test()` uses the `[targets]` list instead.
 
-- [ ] **Step 6: Run the suite on stable and on the LTS**
+- [ ] **Step 6: Run the suite on the LTS and on stable; check the heap functions**
 
 ```bash
 export PATH="$HOME/.juliaup/bin:$PATH"; cd /home/coral/working/HNNG.jl
-julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
-rm -f Manifest.toml
 julia +lts --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
 rm -f Manifest.toml
+julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.test()'      # keeps Manifest.toml for single-file runs
+julia --project=. -e 'using DataStructures; @assert isdefined(DataStructures, :heappush!) && isdefined(DataStructures, :heappop!)'
 ```
 
-Expected for both runs (the first one downloads HDF5_jll and takes a few minutes):
+Expected for both test runs (the first one downloads HDF5_jll and takes a few minutes):
 ```
 Test Summary: | Pass  Total  Time
 HNNG.jl       |    1      1  0.0s
      Testing HNNG tests passed
 ```
+The stable run leaves `Manifest.toml` in the repository root (ignored by `.gitignore`); every later single-file run needs it. The last command prints nothing and exits 0: the resolved DataStructures still provides the array-heap functions `heappush!`/`heappop!` that Task 7 imports. If it fails, set `DataStructures = "0.18"` in `[compat]`, `rm -f Manifest.toml`, and run this step again from the top (each run re-instantiates).
 
 - [ ] **Step 7: Commit**
 
@@ -281,10 +282,10 @@ git commit -m "build: package skeleton, test target and Graphs extension stub" -
   - `mutable struct Cluster; rep::Int; members::Vector{Int}; repdist::Vector{Float64}; radius::Float64; maxout::Vector{Float64}; end`, `_dead_cluster() -> Cluster`
   - `mutable struct Level` with fields `outlink, outdist, inlinks, present, cluster_of, clusters, free, npop, nclusters`; `Level(n::Int)`; `_grow!(lv::Level, n::Int)`
   - `mutable struct DistMemo` with fields `val, seen, mark, epoch, nevals, front, res`; `DistMemo()`; `_begin!(m::DistMemo, n::Int) -> DistMemo`
-  - `mutable struct HNNGIndex{S,M}` with fields `store, metric, is_metric, guard, alive, levels, nevals, memo, last_rewired, last_top`
+  - `mutable struct HNNGIndex{S,M}` with fields `store, metric, is_metric, guard, alive, nlive, levels, nevals, memo, last_rewired, last_top` (`nlive` is the number of live elements, kept equal to `count(alive)`)
   - `HNNGIndex(metric, dim::Integer; T=Float32, guard=nothing)`, `HNNGIndex(metric, ::Type{E}; guard=nothing)`
   - `const GUARD = 1e-6`, `_default_guard(::Type{T}, d::Int) -> Float64` (`max(GUARD, 4·d·eps(T))`)
-  - `_ntotal(idx) -> Int`, `Base.length(idx)` (live), `nlevels(idx)`, `is_metric(idx)`
+  - `_ntotal(idx) -> Int`, `Base.length(idx)` (live, O(1): returns `idx.nlive`), `nlevels(idx)`, `is_metric(idx)`
   - `struct UserMetric{F}; f::F; is_metric::Bool; end`, `UserMetric(f; is_metric=false)`
   - `const EuclidFamily = Union{Euclidean,SqEuclidean,CosineDist}`, `_wrap_metric(m)`, `_is_metric_for(store, metric) -> Bool`
 
@@ -524,6 +525,7 @@ mutable struct HNNGIndex{S<:Union{VectorStore,ObjectStore},M}
     is_metric::Bool
     guard::Float64              # relative prune guard γ (spec §5)
     alive::BitVector
+    nlive::Int                  # live elements, == count(alive); length(idx) is O(1)
     levels::Vector{Level}       # levels[l+1] is level l
     nevals::Int
     memo::DistMemo
@@ -542,20 +544,20 @@ function HNNGIndex(metric, dim::Integer; T::Type{<:AbstractFloat}=Float32,
     m = _wrap_metric(metric)
     s = VectorStore{T}(Int(dim))
     g = guard === nothing ? _default_guard(T, Int(dim)) : Float64(guard)
-    HNNGIndex(s, m, _is_metric_for(s, m), g, falses(0), Level[], 0, DistMemo(), 0, 0)
+    HNNGIndex(s, m, _is_metric_for(s, m), g, falses(0), 0, Level[], 0, DistMemo(), 0, 0)
 end
 
 function HNNGIndex(metric, ::Type{E}; guard::Union{Nothing,Real}=nothing) where {E}
     m = _wrap_metric(metric)
     s = ObjectStore{E}()
     g = guard === nothing ? GUARD : Float64(guard)
-    HNNGIndex(s, m, _is_metric_for(s, m), g, falses(0), Level[], 0, DistMemo(), 0, 0)
+    HNNGIndex(s, m, _is_metric_for(s, m), g, falses(0), 0, Level[], 0, DistMemo(), 0, 0)
 end
 
 _ntotal(idx::HNNGIndex) = length(idx.store)
 
-"""Number of live (not deleted) elements."""
-Base.length(idx::HNNGIndex) = count(idx.alive)
+"""Number of live (not deleted) elements; O(1), read from the counter `nlive`."""
+Base.length(idx::HNNGIndex) = idx.nlive
 
 """Number of levels; 0 for an empty index."""
 nlevels(idx::HNNGIndex) = length(idx.levels)
@@ -866,14 +868,14 @@ git commit -m "feat: Euclidean kernel, unit conversion, input preparation, eleme
 - Modify: `src/HNNG.jl`, `test/runtests.jl`
 
 **Interfaces:**
-- Consumes: Tasks 2–3 (`_rawdist`, `_point`, `_ntotal`, `Level`, `Cluster`, `_to_user`, `_prepare`).
+- Consumes: Tasks 2–3 (`_rawdist`, `_point`, `_ntotal`, `Level`, `Cluster`, `HNNGIndex.nlive`, `_to_user`, `_prepare`).
 - Produces:
   - `_better(d::Float64, i::Int, bd::Float64, bi::Int) -> Bool` — `(d, i) < (bd, bi)`, with `bi == 0` meaning "none yet"
   - `_insum(lv::Level, m::Int) -> Float64` — sum of the inlinkers' outdists in ascending value order
   - `_elect(lv::Level, members::Vector{Int}) -> Int` — representative rule of spec §6.1 item 5 (`members` sorted)
   - `_component(lv::Level, r::Int) -> Vector{Int}` — sorted connected component (outlinks as undirected edges)
   - `_insert_sorted!(v::Vector{Int}, x::Int)`, `_remove_sorted!(v::Vector{Int}, x::Int)`
-  - `verify(idx) -> true` (exported), `_verify_level(idx, l::Int) -> true`, `_verify_top(idx) -> true`, `_fresh_bounds(idx, l::Int, ci::Int) -> (radius::Float64, maxout::Vector{Float64})`, `_rep_mask(idx, l) -> BitVector`, `_fail(msg)`
+  - `verify(idx) -> true` (exported), `_verify_level(idx, l::Int) -> true`, `_verify_top(idx) -> true`, `_verify_nlive(idx) -> true` (the live counter `idx.nlive` equals the number of present level-0 elements), `_fresh_bounds(idx, l::Int, ci::Int) -> (radius::Float64, maxout::Vector{Float64})`, `_rep_mask(idx, l) -> BitVector`, `_fail(msg)`
   - test helpers in `test/oracle.jl`: `brute_knn(idx, q, k) -> (ids, dists)`, `gauss(rng, T, d, n)`, `blobs(rng, T, d, n; nc=8)`, `stream!(idx, X) -> Vector{Int}`, `structure(idx, key=1:n)`, `same_structure(a, b; rtol=1e-9) -> Bool`, `top_rep(idx) -> Int`
 
 - [ ] **Step 1: Write the oracle helpers and the failing tests**
@@ -968,6 +970,7 @@ function three_point_index()
         HNNG._append!(idx.store, [x])
         push!(idx.alive, true)
     end
+    idx.nlive = 3
     lv = HNNG.Level(3)
     lv.present .= true
     lv.npop = 3
@@ -988,6 +991,7 @@ function two_cluster_level0()
         HNNG._append!(idx.store, [x])
         push!(idx.alive, true)
     end
+    idx.nlive = 4
     lv = HNNG.Level(4)
     lv.present .= true
     lv.npop = 4
@@ -1033,6 +1037,7 @@ end
     @test_throws "repdist of 3" verify(broken(i -> i.levels[1].clusters[1].repdist[3] = 4.5))
     @test_throws "radius is 3.0, expected 4.0" verify(broken(i -> i.levels[1].clusters[1].radius = 3.0))
     @test_throws "maxout[0]" verify(broken(i -> i.levels[1].clusters[1].maxout = [1.0]))
+    @test_throws "live counter is 2 but level 0 holds 3 present elements" verify(broken(i -> i.nlive = 2))
     @test_throws "top level 0 has 2 clusters" verify(two_cluster_level0())
     nolevels = HNNGIndex(Euclidean(), 1)
     HNNG._append!(nolevels.store, Float32[1])
@@ -1132,6 +1137,8 @@ end
 end
 ```
 
+`_component` allocates a `Set` per call and `_insum` sorts a copy for three or more inlinkers: known allocation on the repair path; revisit only if Exp.3 latency noise is visible. Do not change the summation order of `_insum` (it fixes the tiebreak).
+
 `src/verify.jl`:
 ```julia
 # verify(idx): the invariants of spec §6.1, recomputed from scratch.
@@ -1145,7 +1152,8 @@ Check every invariant of spec §6.1 from scratch: populations; exact 1-NN outlin
 with `(distance, id)` ties (brute force over each level's population); inlinks as
 the sorted reverse index; clusters as connected components; the representative
 rule; `repdist`, `radius` and `maxout` recomputed bottom-up; one cluster at the
-top. Throws `ErrorException("HNNG.verify: ...")` naming the first violation.
+top; the live counter `nlive` behind `length`. Throws
+`ErrorException("HNNG.verify: ...")` naming the first violation.
 Distance evaluations made here are not counted. Assumes a symmetric distance.
 """
 function verify(idx::HNNGIndex)
@@ -1153,12 +1161,20 @@ function verify(idx::HNNGIndex)
     length(idx.alive) == n || _fail("alive has length $(length(idx.alive)) but the store holds $n")
     if isempty(idx.levels)
         any(idx.alive) && _fail("the index has live elements but no levels")
-        return true
+        return _verify_nlive(idx)
     end
     for l in 0:nlevels(idx)-1
         _verify_level(idx, l)
     end
+    _verify_nlive(idx)
     _verify_top(idx)
+end
+
+"""The O(1) live counter behind `length(idx)` equals the number of present level-0 elements."""
+function _verify_nlive(idx::HNNGIndex)
+    p = isempty(idx.levels) ? 0 : count(idx.levels[1].present)
+    idx.nlive == p || _fail("live counter is $(idx.nlive) but level 0 holds $p present elements")
+    true
 end
 
 function _verify_top(idx::HNNGIndex)
@@ -1311,7 +1327,7 @@ end # module
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `julia --project=. -e 'using Test, HNNG; include("test/invariants.jl")'`
-Expected: both testsets pass (3 + 12 tests).
+Expected: both testsets pass (3 + 13 tests).
 Run: `julia --project=. -e 'using Pkg; Pkg.test()'`
 Expected: `Testing HNNG tests passed`.
 
@@ -1342,7 +1358,7 @@ This task builds level 0 only, with the nearest-neighbour search done by an exac
   - `_refresh_up!(idx, l::Int, cis::Vector{Int})`
   - `_repair!(idx, l::Int, affected::Vector{Int}, extra::Vector{Int}, gone::Int, floating::Vector{Int}) -> (removed::Vector{Int}, added::Vector{Int})`
   - `link!(idx, e::Int, l::Int, floating::Vector{Int}) -> (removed, added)`; at `l == 0` it adds one to `idx.last_rewired` per rewired element
-  - `_insert!(idx, v) -> Int`, `_flush!(idx)`
+  - `_insert!(idx, v) -> Int` (appends to the store, marks the id alive, increments `idx.nlive`), `_flush!(idx)`
   - exported `add!(idx, x::AbstractVector) -> Int`, `add!(idx, X::AbstractMatrix) -> UnitRange{Int}`, `add!(idx, obj::E) -> Int`, `add!(idx, objs::AbstractVector{<:E}) -> UnitRange{Int}`
 
 - [ ] **Step 1: Write the failing tests**
@@ -1637,6 +1653,7 @@ function _insert!(idx::HNNGIndex, v)
     idx.last_top = 0
     id = _append!(idx.store, v)
     push!(idx.alive, true)
+    idx.nlive += 1
     for lv in idx.levels
         _grow!(lv, id)
     end
@@ -1680,7 +1697,7 @@ function add!(idx::HNNGIndex{ObjectStore{E}}, objs::AbstractVector{<:E}) where {
 end
 ```
 
-In `src/HNNG.jl` change the export line to:
+In `src/HNNG.jl` change the `export is_metric, …` line (keep the `export HNNGIndex, …` line) to:
 ```julia
 export is_metric, nlevels, element, verify, add!
 ```
@@ -1875,6 +1892,7 @@ function _insert!(idx::HNNGIndex, v)
     idx.last_top = 0
     id = _append!(idx.store, v)
     push!(idx.alive, true)
+    idx.nlive += 1
     for lv in idx.levels
         _grow!(lv, id)
     end
@@ -2113,6 +2131,10 @@ end
     add!(s, [1.0 2.0; 0.0 0.0])
     @test verify(s)
     @test knn(s, [0.0, 0.0], 2)[2] ≈ [1.0, 4.0]
+    f = HNNGIndex(Euclidean(), 3)                    # Review Focus 3: default Float32 index
+    add!(f, [1.0 4.0 0.5; 2.0 5.0 0.25; 3.0 6.0 2.0])
+    @test verify(f)
+    @test knn(f, [1, 2, 3], 1) == ([1], [0.0]) && check_knn(f, [4, 5, 6], 3)   # Int queries
 end
 
 @testset "nevals counts the serial knn path" begin
@@ -2128,6 +2150,16 @@ end
     @test length(ids) == 5 && issorted(ds)
     knn(idx, randn(rng, Float32, 4), 5)
     @test idx.nevals > before + n1
+end
+
+@testset "knn prunes on clustered low-dimensional data" begin
+    rng = StableRNG(83)
+    idx = HNNGIndex(Euclidean(), 2; T=Float64)
+    add!(idx, blobs(rng, Float64, 2, 2000; nc=20))
+    @test verify(idx)
+    ne = [HNNG.knn_counted(idx, blobs(rng, Float64, 2, 1; nc=20)[:, 1], 10)[3] for _ in 1:20]
+    # calibrate once on the first run; a full scan is 2000, pruning on 20 blobs in 2-D is far below 400
+    @test maximum(ne) < 400
 end
 
 @testset "exact duplicates: ties go to the smallest id" begin    # Review Focus 1
@@ -2177,7 +2209,7 @@ end
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `julia --project=. -e 'using Test, HNNG; include("test/search.jl")'`
-Expected: every testset errors with `UndefVarError: \`knn\` not defined`.
+Expected: every testset errors with `UndefVarError`: `knn` not defined, or `knn_counted` not defined in `HNNG` for the two testsets that call `HNNG.knn_counted` first.
 
 - [ ] **Step 3: Write the implementation**
 
@@ -2249,6 +2281,9 @@ _check_k(k::Integer) = k >= 1 || throw(ArgumentError("k must be at least 1, got 
 Exact `k` nearest live elements of `q`, sorted by ascending distance, ties by
 ascending id, distances in the metric's own units. Fewer than `k` live elements:
 all of them. Empty index: two empty vectors. Counts its evaluations in `nevals`.
+Ties are resolved in the index's internal Euclidean units (the units in which the
+k-th element is selected); after conversion to SqEuclidean or CosineDist units two
+distinct internal distances can print equal, and such a pair keeps its internal order.
 """
 function knn(idx::HNNGIndex, q, k::Integer)
     _check_k(k)
@@ -2265,6 +2300,10 @@ fraction evaluated is that number divided by `length(idx)`).
 """
 function knn_counted(idx::HNNGIndex, q, k::Integer)
     _check_k(k)
+    # idx.memo.nevals is 0 here after any public call: add!, delete!, bulk_add!, knn,
+    # knn_counted and the serial knn_batch all end with _flush!. It is not zeroed: a
+    # residue (a pass that threw inside a user metric, or a direct internal call in a
+    # test) must still reach idx.nevals, and is then counted in this query.
     ids, d = _knn!(idx.memo, idx, _prepare(idx, q), Int(k))
     n = idx.memo.nevals
     _flush!(idx)
@@ -2272,7 +2311,7 @@ function knn_counted(idx::HNNGIndex, q, k::Integer)
 end
 ```
 
-In `src/HNNG.jl` add `include("search.jl")` after `include("delete.jl")` and change the export line to:
+In `src/HNNG.jl` add `include("search.jl")` after `include("delete.jl")` and change the `export is_metric, …` line (keep the `export HNNGIndex, …` line) to:
 ```julia
 export is_metric, nlevels, element, verify, add!, knn
 ```
@@ -2280,7 +2319,7 @@ export is_metric, nlevels, element, verify, add!, knn
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `julia --project=. -e 'using Test, HNNG; include("test/search.jl")'`
-Expected: all six testsets pass.
+Expected: all seven testsets pass.
 Run: `julia --project=. -e 'using Pkg; Pkg.test()'`
 Expected: `Testing HNNG tests passed`, total time well under a minute.
 
@@ -2458,7 +2497,7 @@ function knn_batch(idx::HNNGIndex, Q, k::Integer; threads::Bool=false)
 end
 ```
 
-In `src/HNNG.jl` change the export line to:
+In `src/HNNG.jl` change the `export is_metric, …` line (keep the `export HNNGIndex, …` line) to:
 ```julia
 export is_metric, nlevels, element, verify, add!, knn, knn_batch
 ```
@@ -2466,9 +2505,9 @@ export is_metric, nlevels, element, verify, add!, knn, knn_batch
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `julia --project=. -e 'using Test, HNNG; include("test/search.jl")'`
-Expected: all eight testsets pass.
+Expected: all nine testsets pass.
 Run: `julia -t 4 --project=. -e 'using Test, HNNG; include("test/search.jl")'`
-Expected: all eight testsets pass with four threads.
+Expected: all nine testsets pass with four threads.
 
 - [ ] **Step 5: Commit**
 
@@ -2486,7 +2525,7 @@ git commit -m "feat: level-synchronous oracle engine and knn_batch with optional
 
 **Interfaces:**
 - Consumes: Task 6 (`unlink!`, `propagate!`), Task 3 (`_check_live`), Task 5 (`_flush!`).
-- Produces: `Base.delete!(idx::HNNGIndex, id::Integer) -> idx` (resets `last_rewired`/`last_top`; a drain sets `last_top` to the old top level and leaves no levels).
+- Produces: `Base.delete!(idx::HNNGIndex, id::Integer) -> idx` (tombstones the id and decrements `idx.nlive`; resets `last_rewired`/`last_top`; a drain sets `last_top` to the old top level and leaves no levels).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2556,6 +2595,7 @@ function Base.delete!(idx::HNNGIndex, id::Integer)
     idx.last_rewired = 0
     idx.last_top = 0
     idx.alive[i] = false
+    idx.nlive -= 1
     delta = unlink!(idx, i, 0, Int[])
     if idx.levels[1].npop == 0
         idx.last_top = nlevels(idx) - 1
@@ -3046,7 +3086,7 @@ function root(idx::HNNGIndex)
 end
 ```
 
-In `src/HNNG.jl` change the export lines to:
+In `src/HNNG.jl` replace the `export is_metric, …` line with these two statements (keep the `export HNNGIndex, …` line):
 ```julia
 export is_metric, nlevels, element, verify, add!, knn, knn_batch
 export outlink, outlink_distance, inlinks, cluster, members, representative, radius,
@@ -3160,7 +3200,7 @@ function newick(idx::HNNGIndex; labels=nothing)
 end
 ```
 
-In `src/HNNG.jl` change the second export line to:
+In `src/HNNG.jl` change the `export outlink, …` statement (it spans two lines) to:
 ```julia
 export outlink, outlink_distance, inlinks, cluster, members, representative, radius,
        children, path_to_root, leaves, root, newick
@@ -3274,7 +3314,7 @@ end
 end # module
 ```
 
-In `src/HNNG.jl` change the second export line to:
+In `src/HNNG.jl` change the `export outlink, …` statement (it spans two lines) to:
 ```julia
 export outlink, outlink_distance, inlinks, cluster, members, representative, radius,
        children, path_to_root, leaves, root, newick, level_graph
@@ -3302,7 +3342,7 @@ git commit -m "feat: Graphs.jl extension exports each level as a weighted digrap
 
 **Interfaces:**
 - Consumes: `HNNGIndex` fields, `_wrap_metric`, `_is_metric_for`, `DistMemo`.
-- Produces: `const FORMAT = "HNNG.jl index"`, `const FORMAT_VERSION = 1`; unexported `HNNG.save(path, idx) -> path`, `HNNG.load(path; metric=nothing) -> HNNGIndex` (`nevals`, `last_rewired`, `last_top` start at 0).
+- Produces: `const FORMAT = "HNNG.jl index"`, `const FORMAT_VERSION = 1`; unexported `HNNG.save(path, idx) -> path`, `HNNG.load(path; metric=nothing) -> HNNGIndex` (`nevals`, `last_rewired`, `last_top` start at 0; `nlive` is not saved and is recomputed as `count(alive)`, so the file format carries no counter; a file whose `version` differs from `FORMAT_VERSION` throws `ArgumentError`).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -3352,9 +3392,18 @@ end
 end
 
 @testset "load rejects other files" begin
-    path = joinpath(mktempdir(), "other.jls")
+    dir = mktempdir()
+    path = joinpath(dir, "other.jls")
     open(io -> HNNG.serialize(io, (a = 1,)), path, "w")
     @test_throws "not an HNNG.jl index file" HNNG.load(path)
+    idx = HNNGIndex(Euclidean(), 2)
+    add!(idx, Float32[0 1; 0 1])
+    @test verify(idx)
+    p = open(HNNG.deserialize, HNNG.save(joinpath(dir, "good.hnng"), idx))
+    newer = joinpath(dir, "newer.hnng")
+    open(io -> HNNG.serialize(io, merge(p, (version = HNNG.FORMAT_VERSION + 1,))), newer, "w")
+    @test_throws ArgumentError HNNG.load(newer)
+    @test_throws "format version" HNNG.load(newer)
 end
 ```
 
@@ -3393,16 +3442,21 @@ end
     HNNG.load(path; metric=nothing) -> HNNGIndex
 
 Read an index written by `HNNG.save`. `metric=` is required for an ObjectStore or a
-`UserMetric` index and overrides the saved metric otherwise. `nevals` starts at 0.
+`UserMetric` index and overrides the saved metric otherwise. `nevals` starts at 0; the
+live counter `nlive` is not in the file and is recomputed from the tombstones. A file
+written with another `FORMAT_VERSION` throws `ArgumentError`.
 """
 function load(path::AbstractString; metric=nothing)
     p = open(deserialize, path)
     (p isa NamedTuple && get(p, :format, nothing) == FORMAT) ||
         throw(ArgumentError("$path is not an HNNG.jl index file"))
+    get(p, :version, 0) == FORMAT_VERSION || throw(ArgumentError(
+        "$path has HNNG.jl index format version $(get(p, :version, 0)); this package reads version $FORMAT_VERSION"))
     m = metric === nothing ? p.metric : _wrap_metric(metric)
     m === nothing && throw(ArgumentError(
         "the index in $path has an ObjectStore or a UserMetric; pass metric= to load it"))
-    HNNGIndex(p.store, m, _is_metric_for(p.store, m), p.guard, p.alive, p.levels, 0, DistMemo(), 0, 0)
+    HNNGIndex(p.store, m, _is_metric_for(p.store, m), p.guard, p.alive, count(p.alive), p.levels,
+              0, DistMemo(), 0, 0)
 end
 ```
 
@@ -3542,7 +3596,7 @@ element), and the highest level whose outlinks, clusters or representatives chan
 last_update_stats(idx::HNNGIndex) = (rewired=idx.last_rewired, top_level_touched=idx.last_top)
 ```
 
-In `src/HNNG.jl` change the first export line to:
+In `src/HNNG.jl` change the `export is_metric, …` line (keep the `export HNNGIndex, …` line) to:
 ```julia
 export is_metric, nlevels, element, verify, add!, knn, knn_batch, stats, reset_evals!
 ```
@@ -3575,7 +3629,7 @@ Correctness first: every level's 1-NN graph comes from an exact all-pairs scan w
   - `_allpairs_nn_direct(idx, pop::Vector{Int}) -> (nn::Vector{Int}, nnd::Vector{Float64})` (ids and internal-unit distances, canonical ties; adds `m*(m-1)` to `idx.nevals`)
   - `_allpairs_nn(idx, pop)` (dispatch point; generic method = direct)
   - `_components(lv::Level, pop::Vector{Int}) -> Vector{Vector{Int}}` (sorted members, ordered by smallest id)
-  - exported `bulk_add!(idx, X::AbstractMatrix) -> UnitRange{Int}`; throws `ArgumentError` on an ObjectStore or when any id was ever assigned (Spec assumption 8)
+  - exported `bulk_add!(idx, X::AbstractMatrix) -> UnitRange{Int}` (marks every new id alive and increments `idx.nlive` per id); throws `ArgumentError` on an ObjectStore or when any id was ever assigned (Spec assumption 8)
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -3701,6 +3755,7 @@ function bulk_add!(idx::HNNGIndex{<:VectorStore}, X::AbstractMatrix{<:Real})
     for v in cols
         _append!(idx.store, v)
         push!(idx.alive, true)
+        idx.nlive += 1
     end
     n = length(cols)
     pop = collect(1:n)
@@ -3736,7 +3791,7 @@ function bulk_add!(idx::HNNGIndex{<:VectorStore}, X::AbstractMatrix{<:Real})
 end
 ```
 
-In `src/HNNG.jl` add `include("bulk.jl")` after `include("search.jl")` and change the first export line to:
+In `src/HNNG.jl` add `include("bulk.jl")` after `include("search.jl")` and change the `export is_metric, …` line (keep the `export HNNGIndex, …` line) to:
 ```julia
 export is_metric, nlevels, element, verify, add!, knn, knn_batch, stats, reset_evals!, bulk_add!
 ```
@@ -4165,6 +4220,10 @@ isdefined(@__MODULE__, :brute_knn) || include(joinpath(@__DIR__, "oracle.jl"))
     HNNG.save(joinpath(dir, "u"), um)
     @test_throws "pass metric=" HNNG.load(joinpath(dir, "u"))
     @test verify(HNNG.load(joinpath(dir, "u"); metric=um.metric))
+    # load of a file written with another index format version
+    p = open(HNNG.deserialize, joinpath(dir, "u"))
+    open(io -> HNNG.serialize(io, merge(p, (version = HNNG.FORMAT_VERSION + 1,))), joinpath(dir, "v"), "w")
+    @test_throws "format version $(HNNG.FORMAT_VERSION + 1)" HNNG.load(joinpath(dir, "v"); metric=um.metric)
 end
 ```
 
@@ -4293,6 +4352,7 @@ git commit -m "test: HDF5-based slow runs behind HNNG_SLOW=1" -m "Co-Authored-By
 **Files:**
 - Create: `README.md`, `test/recipes.jl`
 - Modify: `test/runtests.jl`
+- Check: `src/HNNG.jl` (final form, Step 4)
 
 **Interfaces:**
 - Consumes: the whole public API, `level_graph` (Graphs extension).
@@ -4396,7 +4456,10 @@ stats(idx)                                # levels, cluster counts, distance eva
 ```
 
 `Euclidean()`, `SqEuclidean()` and `CosineDist()` use a specialised kernel; results
-come back in the metric's own units (`CosineDist` returns `1 - cos`). Any other
+come back in the metric's own units (`CosineDist` returns `1 - cos`). Ties are
+resolved in the index's internal Euclidean units (the units in which the k-th element
+is selected); after conversion to SqEuclidean or CosineDist units two distinct
+internal distances can print equal, and such a pair keeps its internal order. Any other
 Distances.jl metric works too; a `SemiMetric` or `PreMetric` runs unpruned and stays
 exact. `bulk_add!(idx, X)` builds the same hierarchy as `add!(idx, X)` on an empty
 index with BLAS. `HNNG.save(path, idx)` and `HNNG.load(path)` persist an index.
@@ -4422,7 +4485,7 @@ the heuristic mode of the 2015 ROS system: faster, and it may miss neighbours.
 `radius`, `parent`, `children`, `path_to_root`, `leaves`, `root` and `newick` read
 the stored structure only. With `using Graphs`, `level_graph(idx, l)` returns a
 `SimpleDiGraph`, its weight matrix and the vertex ids, so graph algorithms run on
-stored distances.
+stored distances. With `using Graphs`, write `HNNG.radius` (Graphs exports its own `radius`).
 
 ### Recipe 1: recognition by the nearest stored view
 
@@ -4501,18 +4564,53 @@ minute). `HNNG_SLOW=1` adds the runs on the ann-benchmarks HDF5 files.
 
 ```bash
 export PATH="$HOME/.juliaup/bin:$PATH"; cd /home/coral/working/HNNG.jl
-julia --project=. -e 'using Pkg; Pkg.test()'
-rm -f Manifest.toml
+rm -f Manifest.toml                                                    # the LTS resolves its own
 julia +lts --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.test()'
 rm -f Manifest.toml
+julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.test()'      # keeps Manifest.toml for single-file runs
 julia -t 4 --project=. -e 'using Pkg; Pkg.test()'
 ```
 
 Expected: `Testing HNNG tests passed` three times; the `HNNG.jl` testset time column shows well under 60 s for the default runs (excluding package precompilation). If the LTS run fails on a newer-only Julia feature, replace that construct in `src/` or `test/` with a 1.10 equivalent and rerun both.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 4: Check the final module file**
+
+After the edits of Tasks 2–20, `src/HNNG.jl` must now read exactly:
+```julia
+module HNNG
+
+using Distances: Distances, PreMetric, Metric, Euclidean, SqEuclidean, CosineDist
+using DataStructures: heappush!, heappop!
+using Serialization: serialize, deserialize
+using LinearAlgebra: mul!
+
+export HNNGIndex, UserMetric, Euclidean, SqEuclidean, CosineDist
+export is_metric, nlevels, element, verify, add!, knn, knn_batch, stats, reset_evals!, bulk_add!
+export outlink, outlink_distance, inlinks, cluster, members, representative, radius,
+       children, path_to_root, leaves, root, newick, level_graph
+
+include("types.jl")
+include("kernels.jl")
+include("metrics.jl")
+include("insert.jl")
+include("delete.jl")
+include("search.jl")
+include("bulk.jl")
+include("navigate.jl")
+include("verify.jl")
+include("io.jl")
+
+end # module
+```
+
+The `using` lines come from Tasks 2, 7, 17 and 20; the export statements from Tasks 2–5, 8–9, 14–16, 18 and 19; the includes from Tasks 2–4, 6, 8, 17 and 19. `delete!`, `length` and `parent` extend `Base` and are not exported; `save`, `load`, `distance`, `knn_counted` and `knn_levelsync` stay unexported (Spec assumption 9), and so do `last_update_stats` (Task 18) and `ClusterRef` (Task 14). If the file differs, edit it to match and rerun Step 3.
+
+Run: `julia --project=. -e 'using HNNG; @assert all(n -> isdefined(HNNG, n), names(HNNG))'`
+Expected: no output, exit status 0 (every exported name is defined).
+
+- [ ] **Step 5: Commit**
 
 ```bash
-git add README.md test/recipes.jl test/runtests.jl
+git add README.md test/recipes.jl test/runtests.jl src/HNNG.jl
 git commit -m "docs: README with comparison table and navigation recipes, recipes tested" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
