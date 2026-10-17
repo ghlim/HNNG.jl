@@ -86,3 +86,43 @@ end
     @test check_knn(idx, [0.0, 0.0, 0.0], 4)
     @test check_knn(idx, [1.0, 1.0, 0.0], 4)
 end
+
+@testset "best-first and level-sync engines agree" begin
+    rng = StableRNG(9)
+    for (M, T, d) in ((Euclidean(), Float32, 8), (SqEuclidean(), Float64, 3), (CosineDist(), Float32, 16))
+        idx = HNNGIndex(M, d; T=T)
+        add!(idx, blobs(rng, T, d, 600))
+        @test verify(idx)
+        for _ in 1:20, k in (1, 10)
+            q = 5 .* randn(rng, T, d)
+            @test HNNG.knn_levelsync(idx, q, k) == knn(idx, q, k)
+        end
+    end
+end
+
+@testset "knn_batch" begin
+    rng = StableRNG(91)
+    idx = HNNGIndex(Euclidean(), 5)
+    add!(idx, gauss(rng, Float32, 5, 400))
+    @test verify(idx)
+    Q = gauss(rng, Float32, 5, 37)
+    ids, ds = knn_batch(idx, Q, 6)
+    @test size(ids) == (6, 37) && size(ds) == (6, 37)
+    for j in 1:37
+        @test (ids[:, j], ds[:, j]) == knn(idx, Q[:, j], 6)
+    end
+    before = idx.nevals
+    tids, tds = knn_batch(idx, Q, 6; threads=true)
+    @test tids == ids && tds == ds
+    @test idx.nevals == before
+    small = HNNGIndex(Euclidean(), 5)
+    add!(small, Q[:, 1:3])
+    @test verify(small)
+    pids, pds = knn_batch(small, Q[:, 4:5], 5)
+    @test pids[4:5, :] == zeros(Int, 2, 2) && all(isinf, pds[4:5, :])
+    @test knn_batch(small, zeros(Float32, 5, 0), 2) == (zeros(Int, 2, 0), zeros(2, 0))
+    objs = HNNGIndex(UserMetric((a, b) -> abs(a - b); is_metric=true), Float64)
+    add!(objs, [1.0, 4.0, 9.0])
+    @test verify(objs)
+    @test knn_batch(objs, [0.0, 10.0], 2) == ([1 3; 2 2], [1.0 1.0; 4.0 6.0])
+end

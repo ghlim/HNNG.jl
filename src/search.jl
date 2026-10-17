@@ -92,3 +92,101 @@ function knn_counted(idx::HNNGIndex, q, k::Integer)
     _flush!(idx)
     ids, _to_user.(Ref(idx), d), n
 end
+
+"""
+    HNNG.knn_levelsync(idx, q, k) -> (ids, dists)
+
+The level-synchronous descent of the 2015 algorithm with the corrected, strict and
+guarded prune: at each level offer every candidate cluster's representative, prune
+clusters whose bound exceeds the k-th distance, descend into the survivors' children;
+at level 0 evaluate the survivors' members. A second oracle for the tests only.
+"""
+function knn_levelsync(idx::HNNGIndex, q, k::Integer)
+    _check_k(k)
+    qp = _prepare(idx, q)
+    memo = _begin!(DistMemo(), _ntotal(idx))
+    isempty(idx.levels) && return Int[], Float64[]
+    res = memo.res
+    met = idx.is_metric
+    T = nlevels(idx) - 1
+    list = [ci for (ci, c) in enumerate(idx.levels[T+1].clusters) if c.rep != 0]
+    function offer(m)
+        d = _mdist(memo, idx, qp, m)
+        if memo.mark[m] != memo.epoch
+            memo.mark[m] = memo.epoch
+            _offer!(res, d, m, Int(k))
+        end
+        d
+    end
+    for L in T:-1:0
+        lv = idx.levels[L+1]
+        for ci in list
+            offer(lv.clusters[ci].rep)
+        end
+        keep = Int[]
+        for ci in list
+            c = lv.clusters[ci]
+            lb = met ? _lb(offer(c.rep), c.radius, idx.guard) : 0.0
+            (met && length(res) == k && lb > res[1][1]) || push!(keep, ci)
+        end
+        if L == 0
+            for ci in keep, m in lv.clusters[ci].members
+                offer(m)
+            end
+        else
+            below = idx.levels[L]
+            list = [below.cluster_of[m] for ci in keep for m in lv.clusters[ci].members]
+        end
+    end
+    ids, d = _sorted_results(res)
+    ids, _to_user.(Ref(idx), d)
+end
+
+_queries(idx::HNNGIndex{<:VectorStore}, Q::AbstractMatrix{<:Real}) =
+    [_prepare(idx, view(Q, :, j)) for j in axes(Q, 2)]
+_queries(idx::HNNGIndex{<:ObjectStore}, Q::AbstractVector) = [_prepare(idx, q) for q in Q]
+
+function _store_col!(ids::Matrix{Int}, ds::Matrix{Float64}, j::Int, a, b, idx::HNNGIndex)
+    for i in eachindex(a)
+        ids[i, j] = a[i]
+        ds[i, j] = _to_user(idx, b[i])
+    end
+end
+
+"""
+    knn_batch(idx, Q, k; threads=false) -> (ids::Matrix{Int}, dists::Matrix{Float64})
+
+`knn` for every query: the columns of a matrix (VectorStore) or the elements of a
+vector (ObjectStore). Column `j` holds query `j`'s answer; when fewer than `k` live
+elements exist the tail is padded with id `0` and distance `Inf`. `threads=true`
+splits the queries over `Threads.nthreads()` tasks with private memos and does not
+update the index's evaluation counter.
+"""
+function knn_batch(idx::HNNGIndex, Q, k::Integer; threads::Bool=false)
+    _check_k(k)
+    qs = _queries(idx, Q)
+    nq = length(qs)
+    ids = zeros(Int, k, nq)
+    ds = fill(Inf, k, nq)
+    nq == 0 && return ids, ds
+    if threads
+        chunks = collect(Iterators.partition(1:nq, cld(nq, Threads.nthreads())))
+        tasks = map(chunks) do r
+            Threads.@spawn begin
+                memo = DistMemo()
+                for j in r
+                    a, b = _knn!(memo, idx, qs[j], Int(k))
+                    _store_col!(ids, ds, j, a, b, idx)
+                end
+            end
+        end
+        foreach(wait, tasks)
+    else
+        for j in 1:nq
+            a, b = _knn!(idx.memo, idx, qs[j], Int(k))
+            _store_col!(ids, ds, j, a, b, idx)
+        end
+        _flush!(idx)
+    end
+    ids, ds
+end

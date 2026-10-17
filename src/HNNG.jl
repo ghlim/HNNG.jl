@@ -4,7 +4,7 @@ using Distances: Distances, PreMetric, Metric, Euclidean, SqEuclidean, CosineDis
 using DataStructures: heappush!, heappop!
 
 export HNNGIndex, UserMetric, Euclidean, SqEuclidean, CosineDist
-export is_metric, nlevels, element, verify, add!, knn
+export is_metric, nlevels, element, verify, add!, knn, knn_batch
 
 include("types.jl")
 include("kernels.jl")
