@@ -137,45 +137,97 @@ end
     end
 end
 
-"""Reference for `_euclid`, written out with plain scalar loops in the kernel's fixed order."""
-function ref_euclid(x::Vector{T}, y::Vector{T}) where {T}
-    n, K = length(x), 8
-    nb = div(n, K)
-    acc = zeros(T, K)
-    for blk in 0:nb-1, j in 1:K               # lane j takes coordinates j, j+8, j+16, ...
-        t = x[blk*K+j] - y[blk*K+j]
-        acc[j] = acc[j] + t * t
+"""
+Reference for `_euclid`, written out with plain scalar loops in the kernel's fixed order:
+`W` lanes (8, or 4 for `Float64`) × 4 accumulators over blocks of `4W`, then blocks of
+`W` into accumulator 1, lane-wise `(c1 + c2) + (c3 + c4)`, halving tree
+`v[l] + v[l + W/2]`, then the `n mod W` tail left to right.
+"""
+function ref_euclid(a::AbstractVector{T}, b::AbstractVector{T}) where {T}
+    x, y = collect(a), collect(b)
+    n = length(x)
+    W = T === Float64 ? 4 : 8
+    acc = zeros(T, W, 4)                       # acc[l, c]: lane l of accumulator c
+    i = 0
+    while i + 4W <= n
+        for c in 1:4, l in 1:W                 # lane l of c_j takes coordinate i + (j-1)W + l
+            k = i + (c - 1) * W + l
+            t = x[k] - y[k]
+            acc[l, c] = acc[l, c] + t * t
+        end
+        i += 4W
     end
-    s = ((acc[1] + acc[2]) + (acc[3] + acc[4])) + ((acc[5] + acc[6]) + (acc[7] + acc[8]))
-    for i in nb*K+1:n                          # tail, left to right
-        t = x[i] - y[i]
+    while i + W <= n                           # leftover blocks of W go into c1
+        for l in 1:W
+            t = x[i+l] - y[i+l]
+            acc[l, 1] = acc[l, 1] + t * t
+        end
+        i += W
+    end
+    v = [(acc[l, 1] + acc[l, 2]) + (acc[l, 3] + acc[l, 4]) for l in 1:W]
+    while length(v) > 1                        # horizontal halving tree
+        h = length(v) ÷ 2
+        v = [v[l] + v[l+h] for l in 1:h]
+    end
+    s = v[1]
+    for k in i+1:n                             # tail, left to right
+        t = x[k] - y[k]
         s = s + t * t
     end
-    sqrt(Float64(T(s)))
+    sqrt(Float64(s))
 end
+
+"""Values with mixed magnitudes 2^-8 … 2^8, so different summation orders round differently."""
+mixed(rng, ::Type{T}, dims...) where {T} = T.(randn(rng, dims...) .* exp2.(rand(rng, -8:8, dims...)))
 
 @testset "kernel bits are call-site independent" begin
     rng = StableRNG(31)
-    for T in (Float32, Float64), d in (1, 7, 8, 9, 31, 32, 33, 784)
-        X = randn(rng, T, d, 2) .* T(3)
+    for T in (Float32, Float64), d in (1, 7, 8, 9, 31, 32, 33, 63, 64, 65, 784)
+        X = mixed(rng, T, d, 2)
         x, y = X[:, 1], X[:, 2]
+        r = ref_euclid(x, y)
+        # stride-2 views (getindex path) holding the same values
+        Y = zeros(T, 2d, 2); Y[1:2:end, 1] = x; Y[1:2:end, 2] = y
+        s1, s2 = view(Y, 1:2:2d, 1), view(Y, 1:2:2d, 2)
+        # non-strided views (index vectors) and a unit-stride view at an offset (pointer path)
+        u1, u2 = view(Y, collect(1:2:2d), 1), view(Y, collect(1:2:2d), 2)
+        Z = zeros(T, d + 3, 2); Z[4:end, 1] = x; Z[4:end, 2] = y
+        o1, o2 = view(Z, 4:d+3, 1), view(Z, 4:d+3, 2)
         k = HNNG._euclid(x, y)
+        @test k === r
         @test k === HNNG._euclid(view(X, :, 1), view(X, :, 2)) === HNNG._euclid(y, x)
         @test k === HNNG._euclid(x, view(X, :, 2)) === HNNG._euclid(view(X, :, 1), y)
-        @test k === ref_euclid(x, y)
+        @test k === HNNG._euclid(view(X, :, 2), view(X, :, 1)) === HNNG._euclid(reshape(X, :)[1:d], vec(X[:, 2:2]))
+        @test k === HNNG._euclid(s1, s2) === HNNG._euclid(s2, s1) === HNNG._euclid(s1, y) === HNNG._euclid(x, s2)
+        @test k === HNNG._euclid(u1, u2) === HNNG._euclid(u2, x) === HNNG._euclid(o1, o2) === HNNG._euclid(o1, s2)
+    end
+    for T in (Float32, Float64), d in (33, 784)            # random pairs against the reference
+        ok = true
+        for _ in 1:50
+            x, y = mixed(rng, T, d), mixed(rng, T, d)
+            ok &= HNNG._euclid(x, y) === ref_euclid(x, y) === HNNG._euclid(y, x)
+        end
+        @test ok
     end
     # the reference detects a reordering: a plain left-to-right sum differs somewhere
-    differs = false
-    for _ in 1:200
-        x, y = randn(rng, Float32, 784), randn(rng, Float32, 784)
-        seq = zero(Float32)
-        for i in 1:784
-            seq += (x[i] - y[i])^2
+    for T in (Float32, Float64)
+        differs = false
+        for _ in 1:200
+            x, y = mixed(rng, T, 784), mixed(rng, T, 784)
+            seq = zero(T)
+            for i in 1:784
+                seq += (x[i] - y[i]) * (x[i] - y[i])
+            end
+            differs |= sqrt(Float64(seq)) !== ref_euclid(x, y)
         end
-        differs |= sqrt(Float64(seq)) !== ref_euclid(x, y)
+        @test differs
     end
-    @test differs
+    # any other float type takes the scalar path with the same lane map (W = 8)
+    H = mixed(rng, Float16, 37, 2)
+    @test HNNG._euclid(H[:, 1], view(H, :, 2)) === ref_euclid(H[:, 1], H[:, 2]) === HNNG._euclid(H[:, 2], H[:, 1])
+    @test HNNG._euclid(Float32[], Float32[]) === 0.0 === HNNG._euclid(view(zeros(0, 1), :, 1), Float64[])
     @test_throws DimensionMismatch HNNG._euclid(zeros(3), zeros(4))
+    @test_throws DimensionMismatch HNNG._euclid(zeros(Float32, 3), view(zeros(Float32, 8), 1:2:8))
 end
 
 @testset "units and input preparation" begin
