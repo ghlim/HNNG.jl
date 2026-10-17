@@ -93,6 +93,24 @@ end
         B2 = HNNGIndex(Euclidean(), 3; T=Float64); bulk_add!(B2, Xp); @test verify(B2)
         @test same_structure(structure(B2), structure(S2))
     end
+    # triplicates: every point has two partners at distance 0, so outlinks tie canonically
+    base = gauss(StableRNG(195), Float64, 3, 30)
+    X3 = hcat(base, base, base)
+    for (k, p) in enumerate((collect(1:90), randperm(StableRNG(196), 90), randperm(StableRNG(197), 90)))
+        Xp = X3[:, p]
+        S3 = HNNGIndex(Euclidean(), 3; T=Float64); add!(S3, Xp); @test verify(S3)
+        B3 = HNNGIndex(Euclidean(), 3; T=Float64); bulk_add!(B3, Xp); @test verify(B3)
+        @test same_structure(structure(B3), structure(S3))
+        if k == 1                                   # plain order: smallest other copy wins the tie
+            for i in 1:90
+                q = mod1(i, 30)
+                @test outlink(B3, i) == minimum(c for c in (q, q + 30, q + 60) if c != i)
+            end
+        end
+    end
+    S3 = HNNGIndex(Euclidean(), 3); add!(S3, X3); @test verify(S3)
+    B3 = HNNGIndex(Euclidean(), 3); bulk_add!(B3, X3); @test verify(B3)
+    @test same_structure(structure(B3), structure(S3))
     @test bulk_add!(HNNGIndex(Euclidean(), 3), zeros(Float32, 3, 0)) == 1:0
     one = HNNGIndex(Euclidean(), 3)
     @test bulk_add!(one, ones(Float32, 3, 1)) == 1:1 && verify(one) && nlevels(one) == 1
