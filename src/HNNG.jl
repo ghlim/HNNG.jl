@@ -34,11 +34,11 @@ if ccall(:jl_generating_output, Cint, ()) == 1
             knn_levelsync(idx, q, 3)
             knn_batch(idx, X[:, 1:2], 2)
             delete!(idx, 3)
-            verify(idx)
+            verify(idx) || error("precompile workload: verify failed")
             stats(idx)
             b = HNNGIndex(M, 4; T=T)
             bulk_add!(b, X)
-            verify(b)
+            verify(b) || error("precompile workload: verify failed")
         end
     end
 end

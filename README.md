@@ -136,10 +136,11 @@ dijkstra_shortest_paths(g, 1, W).dists        # no new distance evaluation
 Exactness is relative to the package's own distance kernel. Every prune applies a
 relative guard γ in favour of visiting, which absorbs rounding in the triangle
 inequality: `max(1e-6, 4·d·eps(T))` for vectors of dimension `d` and type `T`, `1e-6`
-for objects, or the value passed as `HNNGIndex(...; guard=γ)`. `Float32` data accumulates in `Float32`; every stored distance,
-radius and bound is `Float64`.
+for objects, or the value passed as `HNNGIndex(...; guard=γ)`. `Float32` data
+accumulates in `Float32`; every stored distance, radius and bound is `Float64`.
 
 ## Tests
 
 `julia --project=. -e 'using Pkg; Pkg.test()'` runs the default suite (under a
-minute). `HNNG_SLOW=1` adds the runs on the ann-benchmarks HDF5 files.
+minute). `HNNG_SLOW=1` adds the runs on the ann-benchmarks HDF5 files, the larger
+knn cases (n = 2000) and the full-size ObjectStore cases.

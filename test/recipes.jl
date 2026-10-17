@@ -12,12 +12,17 @@ end
 const README_MODULE = Module(:READMERecipes)
 
 @testset "README code blocks run" begin
-    @test length(README_BLOCKS) == 5
+    nfences = length(collect(eachmatch(r"^```julia\r?$"m, read(joinpath(@__DIR__, "..", "README.md"), String))))
+    @test !isempty(README_BLOCKS)
+    @test length(README_BLOCKS) == nfences - 1          # every ```julia fence except the Install block
+    Random.seed!(25)                                    # the README calls the global RNG; fix its stream
     for (i, code) in enumerate(README_BLOCKS)
         @test (include_string(README_MODULE, code, "README.md block $i"); true)
     end
     @test verify(README_MODULE.idx)
     @test verify(README_MODULE.views)
+    @test isdefined(README_MODULE, :recognise) && isdefined(README_MODULE, :single_label_subtrees)
+    @test isdefined(README_MODULE, :g)                  # the chain and shortest-path block ran
 end
 
 @testset "README recipes" begin
