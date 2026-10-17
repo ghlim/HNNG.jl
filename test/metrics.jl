@@ -123,3 +123,59 @@ end
     HNNG._begin!(m, 5)                             # a smaller n never shrinks the buffers
     @test length(m.val) == 12 && length(m.seen) == 12 && m.epoch == 2
 end
+
+@testset "Euclidean kernel" begin
+    rng = StableRNG(3)
+    for T in (Float32, Float64), d in (1, 3, 33)
+        a = randn(rng, T, d)
+        b = randn(rng, T, d)
+        k = HNNG._euclid(a, b)
+        @test k isa Float64
+        @test k == HNNG._euclid(b, a)
+        @test isapprox(k, sqrt(sum(abs2, Float64.(a) .- Float64.(b))); rtol = T == Float32 ? 1e-5 : 1e-12)
+        @test HNNG._euclid(a, a) == 0.0
+    end
+end
+
+@testset "units and input preparation" begin
+    e = HNNGIndex(Euclidean(), 2; T=Float64)
+    s = HNNGIndex(SqEuclidean(), 2; T=Float64)
+    c = HNNGIndex(CosineDist(), 2; T=Float64)
+    @test HNNG.distance(e, [0, 0], [3, 4]) == 5.0
+    @test HNNG.distance(s, [0, 0], [3, 4]) ≈ 25.0
+    @test HNNG.distance(c, [1, 0], [0, 2]) ≈ 1.0
+    @test HNNG.distance(c, [1, 1], [2, 2]) ≈ 0.0 atol = 1e-12
+    @test HNNG.distance(c, [1, 0], [-3, 0]) ≈ 2.0
+    @test HNNG._prepare(c, [3.0, 4.0]) ≈ [0.6, 0.8]
+    # Review Focus 4: the zero vector stays zero under cosine and is 0.5 from any unit vector
+    z = HNNG._prepare(c, [0.0, 0.0])
+    @test z == [0.0, 0.0] && all(isfinite, z)
+    @test HNNG.distance(c, [0, 0], [5, 0]) ≈ 0.5
+    f32 = HNNGIndex(Euclidean(), 3)
+    v = HNNG._prepare(f32, [1, 2, 3])
+    @test v isa Vector{Float32} && v == Float32[1, 2, 3]
+    @test HNNG._prepare(f32, view([1.0 2 3; 4 5 6], 2, :)) == Float32[4, 5, 6]
+    @test_throws "dimension mismatch" HNNG._prepare(f32, [1.0, 2.0])
+    @test_throws "non-finite coordinate NaN" HNNG._prepare(f32, [1.0, NaN, 2.0])
+    @test_throws "non-finite coordinate 1.0e300" HNNG._prepare(f32, [1.0, 1e300, 2.0])
+    u = HNNGIndex(UserMetric((a, b) -> abs(a - b); is_metric=true), Int)
+    @test HNNG.distance(u, 3, 10) === 7.0
+end
+
+@testset "element and counted distances" begin
+    idx = HNNGIndex(Euclidean(), 2; T=Float64)
+    for x in ([0.0, 0.0], [3.0, 4.0])
+        HNNG._append!(idx.store, HNNG._prepare(idx, x))
+        push!(idx.alive, true)
+    end
+    @test element(idx, 2) == [3.0, 4.0]
+    @test HNNG._d(idx, 1, 2) == 5.0 && idx.nevals == 1
+    m = HNNG._begin!(HNNG.DistMemo(), 2)
+    q = [0.0, 4.0]
+    @test HNNG._mdist(m, idx, q, 2) == 3.0
+    @test HNNG._mdist(m, idx, q, 2) == 3.0
+    @test m.nevals == 1
+    @test_throws "unknown id 3" element(idx, 3)
+    idx.alive[1] = false
+    @test_throws "id 1 is deleted" element(idx, 1)
+end
