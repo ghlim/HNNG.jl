@@ -2,6 +2,7 @@ module HNNG
 
 using Distances: Distances, PreMetric, Metric, Euclidean, SqEuclidean, CosineDist
 using DataStructures: heappush!, heappop!
+using LinearAlgebra: mul!
 using Serialization: serialize, deserialize
 
 export HNNGIndex, UserMetric, Euclidean, SqEuclidean, CosineDist

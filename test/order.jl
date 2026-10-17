@@ -126,3 +126,53 @@ end
     end
     @test check_knn(B, randn(rng, Float32, 4), 10)
 end
+
+@testset "BLAS all-pairs equals the direct all-pairs kernel" begin
+    rng = StableRNG(20)
+    for (T, d, n) in ((Float32, 2, 700), (Float32, 20, 1100), (Float64, 7, 600), (Float32, 100, 300))
+        idx = HNNGIndex(Euclidean(), d; T=T)
+        X = gauss(rng, T, d, n)
+        X[:, 2:2:40] .= X[:, 1:2:39]                # exact duplicates
+        X .+= T(1000)                               # norms far above the distances
+        for j in axes(X, 2)
+            HNNG._append!(idx.store, HNNG._prepare(idx, view(X, :, j)))
+            push!(idx.alive, true)
+        end
+        pop = collect(1:n)
+        @test HNNG._allpairs_nn_blas(idx, pop) == HNNG._allpairs_nn_direct(idx, pop)
+        sub = sort!(randperm(rng, n)[1:150])
+        @test HNNG._allpairs_nn_blas(idx, sub) == HNNG._allpairs_nn_direct(idx, sub)
+    end
+    # 8-bit pixels at d = 784, with one-ulp near duplicates and exact duplicates
+    d, n = 784, 400
+    X = Float32.(rand(rng, 0:255, d, n))
+    X[1, 1] = 0f0                                   # one near duplicate is a subnormal step
+    near = Matrix{Float32}(undef, d, 20)
+    for c in 1:20
+        src = c == 1 ? 1 : rand(rng, 1:n)
+        near[:, c] .= X[:, src]
+        k = c == 1 ? 1 : rand(rng, 1:d)
+        near[k, c] = nextfloat(near[k, c])
+    end
+    X = hcat(X, near, X[:, rand(rng, 1:n, 10)])
+    idx = HNNGIndex(Euclidean(), d; T=Float32)
+    for j in axes(X, 2)
+        HNNG._append!(idx.store, HNNG._prepare(idx, view(X, :, j)))
+        push!(idx.alive, true)
+    end
+    pop = collect(1:size(X, 2))
+    @test HNNG._allpairs_nn_blas(idx, pop) == HNNG._allpairs_nn_direct(idx, pop)
+    sub = sort!(randperm(rng, size(X, 2))[1:150])
+    @test HNNG._allpairs_nn_blas(idx, sub) == HNNG._allpairs_nn_direct(idx, sub)
+    # squares that underflow (kernel distances 0) and sums that overflow
+    for (T, d, n, s) in ((Float32, 8, 60, 1f-25), (Float32, 4, 50, 1f19), (Float64, 4, 50, 1e154))
+        idx = HNNGIndex(Euclidean(), d; T=T)
+        X = gauss(rng, T, d, n) .* s
+        for j in axes(X, 2)
+            HNNG._append!(idx.store, HNNG._prepare(idx, view(X, :, j)))
+            push!(idx.alive, true)
+        end
+        pop = collect(1:n)
+        @test HNNG._allpairs_nn_blas(idx, pop) == HNNG._allpairs_nn_direct(idx, pop)
+    end
+end

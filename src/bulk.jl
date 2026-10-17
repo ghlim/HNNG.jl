@@ -89,3 +89,5 @@ function bulk_add!(idx::HNNGIndex{<:VectorStore}, X::AbstractMatrix{<:Real})
     _flush!(idx)
     1:n
 end
+
+_allpairs_nn(idx::HNNGIndex{<:VectorStore,<:EuclidFamily}, pop::Vector{Int}) = _allpairs_nn_blas(idx, pop)
