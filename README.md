@@ -72,6 +72,11 @@ add!(views, [rand(3, rand(2:9)) for _ in 1:100])   # descriptor sets of varying 
 knn(views, rand(3, 4), 5)
 ```
 
+Every distance must be symmetric, `f(a, b) == f(b, a)`: the update rules use stored
+distances in both directions, and an asymmetric distance breaks the stored graph
+without an error. An ObjectStore keeps a reference to each inserted object, not a
+copy, so do not mutate an object or reuse one buffer after `add!`; likewise
+`element(idx, id)` returns a view into the index that must not be written.
 `UserMetric(f; is_metric=true)` turns pruning on and is exact when `f` satisfies the
 triangle inequality. With `is_metric=false` (the default, and what a bare function
 gets) the index is exact but unpruned. Declaring a non-metric distance as a metric is
@@ -85,7 +90,9 @@ the stored structure only. Cluster handles are `HNNG.ClusterRef` values; the typ
 not exported, so write `HNNG.ClusterRef` to construct or dispatch on one. With
 `using Graphs`, `level_graph(idx, l)` returns a `SimpleDiGraph`, its weight matrix
 and the vertex ids, so graph algorithms run on stored distances. With `using Graphs`,
-write `HNNG.radius` (Graphs exports its own `radius`).
+write `HNNG.radius` (Graphs exports its own `radius`). A cluster handle is valid until
+the next `add!`, `delete!` or `bulk_add!`; after that a stale handle may name another
+cluster without an error.
 
 ### Recipe 1: recognition by the nearest stored view
 
@@ -151,11 +158,17 @@ dijkstra_shortest_paths(g, 1, W).dists        # no new distance evaluation
 Exactness is relative to the package's own distance kernel. Every prune applies a
 relative guard γ in favour of visiting, which absorbs rounding in the triangle
 inequality: `max(1e-6, 4·d·eps(T))` for vectors of dimension `d` and type `T`, `1e-6`
-for objects, or the value passed as `HNNGIndex(...; guard=γ)`. `Float32` data
-accumulates in `Float32`; every stored distance, radius and bound is `Float64`.
+for objects, or the value passed as `HNNGIndex(...; guard=γ)` (finite and ≥ 0).
+`Float16` and `Float32` data accumulate in `Float32`, `Float64` in `Float64`; every
+stored distance, radius and bound is `Float64`. Squared distances must stay normal
+floating-point numbers: for `Float32`, coordinate differences roughly within
+`1e-18 … 1e18` in magnitude (`Float64`: roughly `1e-150 … 1e150`). Outside that range
+the kernel overflows or underflows and the results, exact relative to that kernel, are
+meaningless.
 
 ## Tests
 
 `julia --project=. -e 'using Pkg; Pkg.test()'` runs the default suite (under a
 minute). `HNNG_SLOW=1` adds the runs on the ann-benchmarks HDF5 files, the larger
-knn cases (n = 2000) and the full-size ObjectStore cases.
+knn cases (n = 2000), the full-size ObjectStore cases and a `julia -t 4` subprocess
+that checks concurrent `knn`, `knn_batch(threads=true)` and `add!` against brute force.

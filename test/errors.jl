@@ -37,7 +37,7 @@ isdefined(@__MODULE__, :brute_knn) || include(joinpath(@__DIR__, "oracle.jl"))
         @test_throws "id 2 is deleted" f(idx, 2)
     end
     @test_throws "level 5 is out of range" outlink(idx, 1; level=5)
-    @test_throws "stale or invalid cluster handle" members(idx, HNNG.ClusterRef(0, 99))
+    @test_throws "invalid cluster handle" members(idx, HNNG.ClusterRef(0, 99))
     # bulk_add! on a non-empty index or an ObjectStore
     @test_throws "needs an empty index" bulk_add!(idx, ones(3, 2))
     drained = HNNGIndex(Euclidean(), 1)

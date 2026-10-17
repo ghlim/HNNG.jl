@@ -12,14 +12,19 @@ end
     element(idx, id)
 
 The stored element: a column view for a VectorStore (unit-normalised under
-`CosineDist`), the object itself for an ObjectStore.
+`CosineDist`), the object itself for an ObjectStore. Both share memory with the index:
+do not write through the view or mutate the object (that corrupts the index); `copy`
+it first.
 """
 element(idx::HNNGIndex, id::Integer) = _point(idx.store, _check_live(idx, id))
 
 """
     ClusterRef(level, index)
 
-Handle of a cluster: its level and slot. Valid until the next `add!`/`delete!`.
+Handle of a cluster: its level and slot. Valid until the next `add!`, `delete!` or
+`bulk_add!`. A handle whose level or slot is out of range, or whose slot is free, throws
+`ArgumentError`; a stale handle whose slot was reused since names another cluster
+without an error.
 """
 struct ClusterRef
     level::Int
@@ -37,7 +42,7 @@ function _cl(idx::HNNGIndex, c::ClusterRef)
     _check_level(idx, c.level)
     cls = idx.levels[c.level+1].clusters
     (1 <= c.index <= length(cls) && cls[c.index].rep != 0) ||
-        throw(ArgumentError("stale or invalid cluster handle $c"))
+        throw(ArgumentError("invalid cluster handle $c: level or slot out of range, or a free slot"))
     cls[c.index]
 end
 
@@ -141,7 +146,9 @@ end
 The hierarchy as a Newick tree (the ROS eTree export): one node per cluster with its
 radius as branch length, one leaf per level-0 element named `labels[id]` (or the id)
 with its distance to its cluster's representative as branch length, all in the
-metric's units. `";"` for an empty index.
+metric's units. `labels` is indexed by id, so it needs an entry for every live id
+(`length(labels) ≥` the largest live id for a vector; a shorter one throws
+`BoundsError`). `";"` for an empty index.
 """
 function newick(idx::HNNGIndex; labels=nothing)
     r = root(idx)

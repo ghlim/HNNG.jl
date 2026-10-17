@@ -106,7 +106,7 @@ HNNGIndex(metric, ::Type{E}; guard=nothing)            # ObjectStore{E}: Vector{
 add!(idx, x::AbstractVector)        -> Int            # one column (VectorStore)
 add!(idx, X::AbstractMatrix)        -> UnitRange{Int} # columns, in order
 add!(idx, obj::E)                   -> Int            # ObjectStore
-add!(idx, objs::AbstractVector{E})  -> UnitRange{Int}
+add!(idx, objs::AbstractVector{<:E}) -> UnitRange{Int} # always a batch: add!(idx, [v]) inserts v as one object
 delete!(idx, id::Int)               -> idx
 
 knn(idx, q, k::Int)                 -> (ids::Vector{Int}, dists::Vector{Float64})
@@ -122,6 +122,18 @@ verify(idx)        # throws on the first violated invariant, returns true
 
 save(path, idx); load(path; metric=nothing)   # called as HNNG.save / HNNG.load; not exported
 ```
+
+Each index has a `ReentrantLock` that `add!`, `delete!`, `bulk_add!`, `knn`,
+`knn_counted`, `knn_levelsync`, `knn_batch`, `verify`, `save`, `stats` and
+`reset_evals!` hold for their whole duration: calls on one index are serialized
+(correct, not parallel), and `knn_batch(...; threads=true)` is the way to run parallel
+queries (its calling task holds the lock while the worker tasks run; a `UserMetric`
+must then be thread-safe). Navigation (§7) reads without the lock: safe alongside
+queries, not alongside updates. An exception in `add!`/`delete!` before the first
+structural write (the level-0 nearest-neighbour search of the new element, or the
+level-0 re-search of the deleted element's inlinkers) rolls the index back and assigns
+no id; a later one marks the index invalid (§9). A failed `bulk_add!` leaves the index
+empty. The original exception is rethrown.
 
 ### 4.1 Ids, elements, order
 
@@ -149,8 +161,12 @@ fewer than `k` results exist.
   unit vectors (this equals `1 - cos`). The C++ returns raw squared L2; the
   Julia package returns **the metric's own units** instead.
 - Any other Distances.jl `PreMetric` is called on column views.
-  `is_metric(idx)` is `true` iff the metric is a `Distances.Metric`
-  (triangle inequality holds); a `SemiMetric` or `PreMetric` runs unpruned.
+  `is_metric(idx)` is `true` iff pruning runs: the metric is a
+  `Distances.Metric`, is `SqEuclidean`/`CosineDist` on a VectorStore (internal
+  Euclidean units), or is a `UserMetric` declared `is_metric=true`; a
+  `SemiMetric` or `PreMetric` runs unpruned.
+- Every distance must be symmetric (`M(a, b) == M(b, a)`); the update rules use
+  stored distances in both directions. A NaN distance throws (§9).
 - `UserMetric(f; is_metric=false)` wraps any callable `f(a, b) -> Real` for
   either store. The user flips `is_metric=true` when `f` satisfies the
   triangle inequality. A bare function passed as the metric is treated as
@@ -188,6 +204,8 @@ mutable struct HNNGIndex{S<:Union{VectorStore,ObjectStore}, M}
     levels::Vector{Level}                 # levels[l+1] is level l
     nevals::Int
     memo::DistMemo                        # per-query memo for the serial path
+    invalid::Bool                         # set by an exception after a structural write (§9)
+    lock::ReentrantLock                   # serializes public calls (§4)
 end
 mutable struct Level
     outlink::Vector{Int}      # 0 = none; indexed by id, length n_total
@@ -208,7 +226,12 @@ end
 
 All stored distances, radii and bounds are `Float64`, whatever `T` is. The
 Euclidean kernel for `Float32` data accumulates in `Float32` (as BLAS and the
-C++ do); the result is widened on store. Every prune comparison applies a
+C++ do), `Float16` data is widened and accumulates in `Float32` (same lane order),
+`Float64` accumulates in `Float64`; the result is widened on store. Usable
+magnitudes: squared distances must stay normal floating-point numbers of the
+accumulation type (Float32: coordinate differences roughly within `1e-18 … 1e18`);
+outside that range results are exact relative to an overflowed or underflowed kernel
+and meaningless (documented, not guarded). Every prune comparison applies a
 relative guard `γ` in favour of visiting, to absorb rounding in the triangle
 inequality: `LB = max(0, M − r − γ·(M + r))`, compared strictly. The default
 is `γ = max(1e-6, 4·d·eps(T))` for a VectorStore of dimension `d` and element
@@ -416,6 +439,9 @@ newick(idx; labels=nothing)      # Newick string of the hierarchy with radii as 
                                  # lengths and labels[id] as leaf names (ROS eTree export)
 ```
 
+A cluster handle is valid until the next `add!`, `delete!` or `bulk_add!`; a
+stale handle whose slot was reused may name another cluster without an error.
+
 The README shows two application recipes built on these calls and an external
 `labels` vector: recognition by the label of the 1-NN, and the maximal
 single-label subtrees of an object (the ROS `ObjectRepresentation`), found by
@@ -449,12 +475,19 @@ manuscript.
 
 ## 9. Error handling
 
-`ArgumentError` with the offending value for: dimension mismatch on `add!`
-or `knn`; a non-finite coordinate; `k < 1`; `delete!` of an unknown or
-already deleted id; navigation on a dead id; `bulk_add!` on a non-empty index
-or an ObjectStore; `load` of an ObjectStore or `UserMetric` index without
-`metric=`; `load` of a file that is not an HNNG.jl index or whose format
-version differs from `FORMAT_VERSION`. No other exceptions are part of the
+`ArgumentError` with the offending value for: `dim < 1`; a `guard` that is
+not finite and ≥ 0; dimension mismatch on `add!` or `knn`; a non-finite
+coordinate; `k < 1`; a NaN distance (naming the pair; during an update it is
+handled as in §4); `delete!` of an unknown or already deleted id; navigation on
+a dead id; an out-of-range `level`; a `ClusterRef` whose level or slot is out of
+range or whose slot is free; any call that searches, mutates, navigates,
+verifies or saves an index invalidated by an exception in the middle of an
+update; `bulk_add!` on a non-empty index or an ObjectStore; `load` of an
+ObjectStore or `UserMetric` index without `metric=`; `load` with a `metric=`
+whose type differs from the saved metric; `load` of a file that is empty,
+damaged or not an HNNG.jl index, or whose format version differs from
+`FORMAT_VERSION` (`save` writes a plain `(FORMAT, FORMAT_VERSION)` header that
+`load` checks before reading the payload). No other exceptions are part of the
 contract. The package never
 silently drops an operation.
 

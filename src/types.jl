@@ -131,16 +131,24 @@ function _begin!(m::DistMemo, n::Int)
 end
 
 """
-    HNNGIndex(metric, dim::Int; T=Float32)   # VectorStore: columns of T
-    HNNGIndex(metric, ::Type{E})             # ObjectStore{E}
+    HNNGIndex(metric, dim::Int; T=Float32, guard=nothing)   # VectorStore: columns of T
+    HNNGIndex(metric, ::Type{E}; guard=nothing)             # ObjectStore{E}
 
 An exact, parameter-free hierarchical nearest-neighbour-graph index. `metric` is a
 Distances.jl `PreMetric`, a `UserMetric`, or any callable `f(a, b) -> Real` (taken as
 `UserMetric(f; is_metric=false)`). `Euclidean`, `SqEuclidean` and `CosineDist` on a
 VectorStore use the specialised kernel and work in Euclidean units internally;
-results are always in the metric's own units. `guard` is the relative prune guard
-γ: `nothing` gives `max(1e-6, 4·d·eps(T))` for a VectorStore and `1e-6` for an
-ObjectStore.
+results are always in the metric's own units. The distance must be symmetric,
+`M(a, b) == M(b, a)`: the update rules compare stored distances in both directions.
+`guard` is the relative prune guard γ, finite and ≥ 0 (`ArgumentError` otherwise):
+`nothing` gives `max(1e-6, 4·d·eps(T))` for a VectorStore and `1e-6` for an ObjectStore.
+`Float16` data accumulates in `Float32`, `Float32` in `Float32`, `Float64` in `Float64`.
+
+Magnitudes: squared distances must stay normal floating-point numbers of the
+accumulation type (for `Float32`, coordinate differences roughly within `1e-18 … 1e18`
+in magnitude; for `Float64`, roughly `1e-150 … 1e150`). Outside that range the kernel
+overflows to `Inf` or underflows into subnormals, and results are exact only relative
+to that kernel, which makes them meaningless.
 
 Exceptions: when the metric throws or returns NaN (an `ArgumentError`) or a call is
 interrupted during `add!`, `delete!` or `bulk_add!`, the exception is rethrown. An

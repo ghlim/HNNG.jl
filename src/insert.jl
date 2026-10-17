@@ -1,4 +1,4 @@
-# Level maintenance (spec §6). This task adds the shared canonical helpers.
+# Level maintenance (spec §6): canonical helpers, link!, propagate! and add!.
 
 """`(d, i) < (bd, bi)` lexicographically; `bi == 0` means no candidate yet."""
 @inline _better(d::Float64, i::Int, bd::Float64, bi::Int) =
@@ -73,7 +73,7 @@ end
 
 Exact scan of the level-`l` population: the `(distance, id)`-nearest element to `q`
 other than `ex1` and `ex2`, and every element evaluated. Distances of `cands` are in
-`idx.memo.val`. Used by `link!`/`unlink!` until Task 7 and by the tests as an oracle.
+`idx.memo.val`. An exhaustive oracle for `_nn_search` in the tests.
 """
 function _scan_level(idx::HNNGIndex, q, l::Int, ex1::Int, ex2::Int)
     memo = _begin!(idx.memo, _ntotal(idx))
@@ -489,7 +489,11 @@ end
     add!(idx, objs::AbstractVector{<:E}) -> UnitRange{Int}
 
 Insert and return the new id(s). Vector input of any `Real` type is converted to the
-store's element type; a matrix is validated in full before anything is inserted.
+store's element type (and copied); a matrix is validated in full before anything is
+inserted. For an ObjectStore, a vector of `E`s is always a batch, also when `E` is
+itself a vector type: `add!(idx, [v])` inserts `v` as one object. An ObjectStore keeps
+a reference to each object, not a copy: do not mutate an object after inserting it, and
+do not reuse one buffer for several objects.
 
 If the metric throws (or returns NaN, an `ArgumentError` naming the ids, the new
 element's being the id it would have received), or the call is interrupted, the

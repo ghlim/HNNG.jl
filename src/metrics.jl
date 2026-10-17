@@ -3,7 +3,10 @@
 """
     UserMetric(f; is_metric=false)
 
-Wrap any callable `f(a, b) -> Real` as the index distance, for either store. Set
+Wrap any callable `f(a, b) -> Real` as the index distance, for either store. `f` must
+be symmetric, `f(a, b) == f(b, a)` (the update rules use stored distances in both
+directions; an asymmetric `f` breaks the stored graph without an error), and must not
+return NaN (an `ArgumentError`). Set
 `is_metric=true` only when `f` satisfies the triangle inequality: pruning then runs.
 Declaring a non-metric `f` with `is_metric=true` is the opt-in heuristic mode of the
 2015 ROS system: queries and inserts may miss neighbours and no error is raised.
