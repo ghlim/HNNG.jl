@@ -453,7 +453,9 @@ manuscript.
 or `knn`; a non-finite coordinate; `k < 1`; `delete!` of an unknown or
 already deleted id; navigation on a dead id; `bulk_add!` on a non-empty index
 or an ObjectStore; `load` of an ObjectStore or `UserMetric` index without
-`metric=`. No other exceptions are part of the contract. The package never
+`metric=`; `load` of a file that is not an HNNG.jl index or whose format
+version differs from `FORMAT_VERSION`. No other exceptions are part of the
+contract. The package never
 silently drops an operation.
 
 ## 10. Testing and verification
