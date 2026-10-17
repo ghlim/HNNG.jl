@@ -98,3 +98,53 @@ function root(idx::HNNGIndex)
     isempty(idx.levels) && return nothing
     ClusterRef(nlevels(idx) - 1, findfirst(c -> c.rep != 0, idx.levels[end].clusters))
 end
+
+"""Level-0 ids under `c`, sorted (the ROS `getLeafElementswithCluster`)."""
+function leaves(idx::HNNGIndex, c::ClusterRef)
+    cl = _cl(idx, c)
+    c.level == 0 && return copy(cl.members)
+    out = Int[]
+    for ch in children(idx, c)
+        append!(out, leaves(idx, ch))
+    end
+    sort!(out)
+end
+
+function _newick_name(s::AbstractString)
+    occursin(r"[\s(),:;'\[\]]", s) ? "'" * replace(s, "'" => "''") * "'" : String(s)
+end
+
+function _newick!(io::IO, idx::HNNGIndex, c::ClusterRef, labels)
+    cl = _cl(idx, c)
+    print(io, "(")
+    if c.level == 0
+        for (i, m) in enumerate(cl.members)
+            i > 1 && print(io, ",")
+            name = labels === nothing ? string(m) : string(labels[m])
+            print(io, _newick_name(name), ":", _to_user(idx, cl.repdist[i]))
+        end
+    else
+        for (i, ch) in enumerate(children(idx, c))
+            i > 1 && print(io, ",")
+            _newick!(io, idx, ch, labels)
+        end
+    end
+    print(io, "):", _to_user(idx, cl.radius))
+end
+
+"""
+    newick(idx; labels=nothing) -> String
+
+The hierarchy as a Newick tree (the ROS eTree export): one node per cluster with its
+radius as branch length, one leaf per level-0 element named `labels[id]` (or the id)
+with its distance to its cluster's representative as branch length, all in the
+metric's units. `";"` for an empty index.
+"""
+function newick(idx::HNNGIndex; labels=nothing)
+    r = root(idx)
+    r === nothing && return ";"
+    io = IOBuffer()
+    _newick!(io, idx, r, labels)
+    print(io, ";")
+    String(take!(io))
+end

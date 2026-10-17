@@ -53,3 +53,22 @@ end
         @test all(i -> representative(idx, p[i]) in members(idx, p[i+1]), 1:length(p)-1)
     end
 end
+
+@testset "leaves and newick" begin
+    idx = line4()
+    @test leaves(idx, root(idx)) == [1, 2, 3, 4]
+    @test leaves(idx, cluster(idx, 4)) == [3, 4]
+    @test newick(idx) == "((1:0.0,2:1.0):1.0,(3:0.0,4:1.0):1.0):11.0;"
+    @test newick(idx; labels=["a", "b", "c d", "e'f"]) ==
+          "((a:0.0,b:1.0):1.0,('c d':0.0,'e''f':1.0):1.0):11.0;"
+    @test newick(HNNGIndex(Euclidean(), 1)) == ";"
+    rng = StableRNG(15)
+    big = HNNGIndex(Euclidean(), 3)
+    stream!(big, blobs(rng, Float32, 3, 120))
+    @test leaves(big, root(big)) == 1:120
+    @test count(==(','), newick(big)) == 119
+    n0 = big.nevals
+    newick(big)
+    leaves(big, root(big))
+    @test big.nevals == n0
+end
