@@ -172,3 +172,56 @@ meaningless.
 minute). `HNNG_SLOW=1` adds the runs on the ann-benchmarks HDF5 files, the larger
 knn cases (n = 2000), the full-size ObjectStore cases and a `julia -t 4` subprocess
 that checks concurrent `knn`, `knn_batch(threads=true)` and `add!` against brute force.
+
+## Benchmarks
+
+The harness in `bench/` produces every benchmark number, table and figure the manuscript
+uses. It has its own Julia environment (`bench/Project.toml`, with `HNNG` as a dev
+dependency) and runs single-threaded, pinned to one core:
+
+```bash
+bench/run.sh                    # full run, several hours, results in bench/results/
+BENCH_SMOKE=1 bench/run.sh      # every experiment on tiny inputs, results in bench/results-smoke/
+```
+
+The experiments run in the order Exp.2, Exp.3, Exp.1 (random-xs), Exp.1b (Fashion-MNIST, the
+longest). An experiment whose CSV already exists is skipped, so after a crash the same command
+continues where it stopped; `BENCH_FORCE=1` reruns everything and `BENCH_ONLY=exp3` (one of `exp1`,
+`exp1b`, `exp2`, `exp3`) restricts the run to one experiment (combine with `BENCH_FORCE=1` to rerun a
+finished one). Tables and figures are written only when all four CSV files exist. Smoke runs always
+rerun everything.
+
+`BENCH_CPU` picks the core (default 2), `BENCH_DATA` the directory with the ann-benchmarks
+HDF5 files (default `/home/coral/working/benchmarks/data`), `BENCH_RESULTS` the output
+directory. One step at a time: `julia -t 1 --project=bench bench/exp1.jl` (likewise
+`exp2.jl`, `exp3.jl`, `tables.jl`, `plots.jl`). Tests: `julia -t 1 --project=bench bench/test/runtests.jl`.
+
+| Output (in `bench/results/`) | Content |
+|---|---|
+| `exp1.csv`, `exp1b.csv` | random-xs-20 and fashion-mnist-784: build time, QPS, both recalls, fraction evaluated, hNNG levels and cluster counts, one HNSW row per `ef` |
+| `exp2.csv` | Gaussian (n = 5,000) and 100 blobs (n = 10,000), d = 2 to 128: ρ, QPS, build time, levels |
+| `exp3.csv` | Gaussian grid n ∈ {8,000, 16,000, 32,000} × d ∈ {16, 64, 128}, every insert and delete: latency, distance evaluations, level-0 rewires, highest level touched; streaming and bulk rebuilds and the baselines |
+| `env.txt` | Julia version, Manifest hash, CPU model, governor, allowed CPUs, threads, commit and `dirty` flag, `smoke` flag, seeds, package versions, kernel, date |
+| `tex/` | `tab_annbench.tex`, `tab_fashion.tex`, `tab_ops.tex` (tabular bodies) and `macros.tex` |
+| `fig/` | `recall_qps.pdf`, `dist_eval_vs_dim.pdf`, `qps_vs_dim.pdf`, `ops_comparison.pdf` |
+
+| Protocol | Setting |
+|---|---|
+| Threads | `julia -t 1` and `BLAS.set_num_threads(1)`, checked before every experiment |
+| CPU | process pinned with `taskset -c 2` |
+| Queries | one at a time, `k = 10`; QPS from the best of three timed passes after one warm-up query |
+| Build time | one timed build after an untimed warm-up build on min(n, 2000) points (not best of three); a warning is logged if compilation leaks into the timed build |
+| Recall | ann-benchmarks rule (returned distance ≤ true k-th distance + 1e-3) and strict id recall, distances recomputed in Float64 from the returned ids |
+| Fraction evaluated ρ | distance evaluations per query (`HNNG.knn_counted`) divided by live elements |
+| Exp.3 | 200 inserts, then 200 deletes of random live ids; median over 3 runs of the mean latency per operation (a `GC.gc(false)` before each timed operation, outside the timing); 20 queries checked against brute force after every operation |
+| Baselines | brute force (BLAS gemv, exact Float64 re-rank), KD-tree and ball tree (NearestNeighbors.jl, leaf size 25), HNSW.jl (M = 16, efConstruction = 200, ef from 10 to 640), SimilaritySearch.jl when it loads |
+| Exactness | the exact methods (hNNG, brute force, KD-tree, ball tree) must return the true k nearest distances (relative tolerance 1e-5) for every query of Exp.1, Exp.1b and Exp.2; the run fails otherwise |
+
+SimilaritySearch.jl method notes: its rows use `Dist.L2()` (Euclidean, like every other method) and
+`SearchGraphContext(; neighborhood = Neighborhood(; neardup = 0f0))` with `expand!` after each search.
+`neardup = 0f0` folds exact duplicate points into cluster members, so a plain search returns one
+representative per duplicate group and would under-count recall on data with repeated points
+(Fashion-MNIST); `expand!` returns the raw k nearest neighbours, duplicates included, as for every
+other method.
+
+The numbers are Julia measurements; parity with the C++ reference implementation is not a goal.
