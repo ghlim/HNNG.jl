@@ -70,7 +70,7 @@ function exp3_warmup(d::Int)
     end
     HNNG.bulk_add!(new_index3(d), P)
     HNNG.knn(idx, P[:, 1], EXP3_K)
-    HAS_HNSW && build_hnsw(HNSWjl(), P; nbuild = 50)
+    HAS_HNSW && hnsw_insert!(build_hnsw(HNSWjl(), P; nbuild = 50), 51)   # compiles the timed insert path
     return nothing
 end
 
@@ -92,7 +92,8 @@ function exp3_hnng!(df::DataFrame, c::Exp3Config, P::Matrix{Float32}, Qc::Matrix
     t_bulk = seconds_since(t0)
     push!(df, (; base..., op = "rebuild-bulk", seq = 1, latency_s = t_bulk, nevals = HNNG.stats(bulk).nevals,
                rewired = missing, top_level = missing,
-               note = "bulk_add! of n points; nevals = Gram pairs + re-ranks (not comparable with streaming nevals)"))
+               note = "bulk_add! of n points; nevals = Gram pairs m(m-1) per level (direct pairs on the non-BLAS path) + exact re-ranks + " *
+                          "rep-to-member radius and child-rep bound distances (not comparable with streaming nevals)"))
     bulk = nothing
     alive = falses(size(P, 2))
     alive[1:n] .= true
