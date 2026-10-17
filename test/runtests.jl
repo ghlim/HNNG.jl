@@ -7,4 +7,5 @@ using Test, HNNG
     include("search.jl")
     include("updates.jl")
     include("objects.jl")
+    include("order.jl")
 end
