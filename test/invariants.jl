@@ -158,3 +158,51 @@ end
     end))
     @test_throws "free slot 1 holds a live cluster" verify(broken(i -> i.levels[1].free = [1]))
 end
+
+@testset "level 0: streaming inserts keep the exact 1-NN graph" begin
+    rng = StableRNG(5)
+    for (T, d, n) in ((Float64, 2, 120), (Float32, 8, 100))
+        idx = HNNGIndex(Euclidean(), d; T=T)
+        X = gauss(rng, T, d, n)
+        for j in 1:n
+            @test add!(idx, view(X, :, j)) == j
+            @test HNNG._verify_level(idx, 0)
+        end
+        @test length(idx) == n
+        @test idx.levels[1].npop == n
+    end
+end
+
+@testset "level 0: four points on a line" begin
+    idx = HNNGIndex(Euclidean(), 1; T=Float64)
+    for x in (0.0, 1.0, 10.0, 11.0)
+        add!(idx, [x])
+        @test HNNG._verify_level(idx, 0)
+    end
+    lv = idx.levels[1]
+    @test lv.outlink == [2, 1, 4, 3]
+    @test lv.inlinks == [[2], [1], [4], [3]]
+    @test sort([c.rep for c in lv.clusters if c.rep != 0]) == [1, 3]
+end
+
+@testset "add! accepts any real input on a Float32 index" begin   # Review Focus 3
+    idx = HNNGIndex(Euclidean(), 3)
+    @test add!(idx, [1, 2, 3]) == 1
+    @test add!(idx, [0.5, 0.25, 2.0]) == 2
+    M = [1.0 4.0; 2.0 5.0; 3.5 6.0]
+    @test add!(idx, M) == 3:4
+    @test add!(idx, view(permutedims(M), 2, :)) == 5
+    @test add!(idx, Float16[1, 1, 1]) == 6
+    @test HNNG._verify_level(idx, 0)
+    @test element(idx, 1) == Float32[1, 2, 3]
+    @test element(idx, 5) == Float32[4, 5, 6]
+    @test eltype(element(idx, 2)) == Float32
+end
+
+@testset "add! on an ObjectStore" begin
+    idx = HNNGIndex(UserMetric((a, b) -> abs(a - b); is_metric=true), Float64)
+    @test add!(idx, 3.0) == 1
+    @test add!(idx, [1.0, 7.5, 2.0]) == 2:4
+    @test HNNG._verify_level(idx, 0)
+    @test element(idx, 3) == 7.5
+end
