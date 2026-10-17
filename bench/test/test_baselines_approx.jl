@@ -12,6 +12,8 @@ include(joinpath(@__DIR__, "setup.jl"))
             @test method_name(m) == "HNSW"
             h, t = build_time(m, X)
             @test t > 0
+            # standard HNSW at M = 16: 16 links per upper layer, 32 on layer 0, m_L = 1/ln 16
+            @test h.g.lgraph.M == 16 && h.g.lgraph.M0 == 32 && h.g.lgraph.m_L ≈ 1 / log(16)
             set_ef!(h, 200)
             res = [query(h, q, 10) for q in qs]
             @test all(r[1] isa Vector{Int} && issorted(collect(zip(r[2], r[1]))) for r in res)
@@ -28,6 +30,9 @@ include(joinpath(@__DIR__, "setup.jl"))
             end
             ids, ds = query(h, q300, 5)
             @test ids[1] == 300 && ds[1] == 0.0
+            # a driver that re-inserts an id fails loudly instead of being skipped
+            @test_throws ArgumentError hnsw_insert!(h, 300)
+            @test_throws ArgumentError hnsw_insert!(h, 1)
         end
     else
         @info "HNSW.jl not loaded; HNSW rows are skipped"

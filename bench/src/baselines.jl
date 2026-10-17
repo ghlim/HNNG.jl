@@ -168,16 +168,31 @@ Hands every column of P to HNSW.jl (so later inserts need no resize) and links c
 function build_hnsw(m::HNSWjl, P::Matrix{Float32}; nbuild::Int = size(P, 2))
     Random.seed!(SEED_HNSW)
     data = [P[:, i] for i in 1:size(P, 2)]
-    g = HNSW.HierarchicalNSW(data; metric = Euclidean(), M = m.M,
-                             efConstruction = m.efConstruction, ef = m.ef)
+    # Effective configuration: standard HNSW with M = m.M (16): m.M links per upper layer,
+    # 2m.M (32) on layer 0, m_L = 1/ln m.M. HNSW.jl 0.1.6 passes M and M0 through two swaps that
+    # cancel: src/interface.jl:74 calls `LayeredGraph{T}(max_elements, M0, M, m_L)` against the
+    # signature `(num_elements, M, M0, m_L)` at src/layered_graphs.jl:39, which forwards
+    # `(linklist, M, M0, m_L)` positionally into the struct whose fields are declared
+    # `(linklist, M0, M, m_L)` at src/layered_graphs.jl:18-22. So the keywords land in the
+    # fields of the same name, and `max_connections` (src/layered_graphs.jl:94) caps layer 0 at
+    # lgraph.M0. Passing M = 2m.M, M0 = m.M would invert them. The values are passed explicitly
+    # (they equal HNSW.jl's defaults M0 = 2M, m_L = 1/log(M)); the tests assert the fields.
+    g = HNSW.HierarchicalNSW(data; metric = Euclidean(), M = m.M, M0 = 2 * m.M,
+                             m_L = 1 / log(m.M), efConstruction = m.efConstruction, ef = m.ef)
     HNSW.add_to_graph!(g, 1:nbuild)
     return HNSWHandle(g)
 end
 build(m::HNSWjl, X::Matrix{Float32}) = build_hnsw(m, X)
 set_ef!(h::HNSWHandle, ef::Int) = HNSW.set_ef!(h.g, ef)
 
-"HNSW.jl's online insert: link column i (already in the data vector) into the graph."
-hnsw_insert!(h::HNSWHandle, i::Int) = HNSW.add_to_graph!(h.g, [i])
+"""
+HNSW.jl's online insert: link column i (already in the data vector) into the graph.
+Throws if i is already linked: HNSW.jl itself would only warn and skip it.
+"""
+function hnsw_insert!(h::HNSWHandle, i::Int)
+    h.g.added[i] && throw(ArgumentError("hnsw_insert!: id $i is already in the graph"))
+    return HNSW.add_to_graph!(h.g, [i])
+end
 
 function query(h::HNSWHandle, q::AbstractVector{Float32}, k::Int)
     ids, ds = HNSW.knn_search(h.g, convert(Vector{Float32}, q), k)
@@ -211,13 +226,15 @@ function build(::SSSearchGraph, X::Matrix{Float32})
     Random.seed!(SEED_SS)             # RandomHints and the parameter optimiser draw from the global RNG
     SS = SimilaritySearch
     g = SS.SearchGraph(SS.Dist.L2(), SS.MatrixDatabase(X))
-    ctx = SS.SearchGraphContext(; neighborhood = SS.Neighborhood(; neardup = 0f0))
+    # reporters = []: silent build (searchgraph/context.jl:42 in 1.6.7: "Pass `reporters=[]` to
+    # silence this context completely"); the auto-tuning callback is unaffected
+    ctx = SS.SearchGraphContext(; neighborhood = SS.Neighborhood(; neardup = 0f0), reporters = [])
     SS.index!(g, ctx)
     return SSHandle(g, ctx)
 end
 function build(::SSExhaustive, X::Matrix{Float32})
     SS = SimilaritySearch             # no randomness: index! is a no-op, search scans every column
-    return SSHandle(SS.ExhaustiveSearch(SS.Dist.L2(), SS.MatrixDatabase(X)), SS.GenericContext())
+    return SSHandle(SS.ExhaustiveSearch(SS.Dist.L2(), SS.MatrixDatabase(X)), SS.GenericContext(; reporters = []))
 end
 function query(h::SSHandle, q::AbstractVector{Float32}, k::Int)
     SS = SimilaritySearch
