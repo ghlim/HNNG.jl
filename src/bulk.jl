@@ -46,7 +46,9 @@ structure that streaming `add!(idx, X)` produces.
 bulk_add!(::HNNGIndex{<:ObjectStore}, X) =
     throw(ArgumentError("bulk_add! needs a VectorStore index; this index stores objects"))
 
-function bulk_add!(idx::HNNGIndex{<:VectorStore}, X::AbstractMatrix{<:Real})
+bulk_add!(idx::HNNGIndex{<:VectorStore}, X::AbstractMatrix{<:Real}) = _locked(() -> _bulk_add!(idx, X), idx)
+
+function _bulk_add!(idx::HNNGIndex{<:VectorStore}, X::AbstractMatrix{<:Real})
     _ntotal(idx) == 0 ||
         throw(ArgumentError("bulk_add! needs an empty index; this index has already assigned $(_ntotal(idx)) ids"))
     _check_dim(idx, X)

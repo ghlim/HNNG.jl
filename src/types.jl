@@ -141,6 +141,14 @@ VectorStore use the specialised kernel and work in Euclidean units internally;
 results are always in the metric's own units. `guard` is the relative prune guard
 γ: `nothing` gives `max(1e-6, 4·d·eps(T))` for a VectorStore and `1e-6` for an
 ObjectStore.
+
+Concurrency: each index has a `ReentrantLock`. `add!`, `delete!`, `bulk_add!`, `knn`,
+`HNNG.knn_counted`, `HNNG.knn_levelsync`, `knn_batch`, `verify`, `HNNG.save`, `stats`
+and `reset_evals!` hold it for their whole duration, so calls on one index from several
+threads are serialized: correct, not parallel. Use `knn_batch(idx, Q, k; threads=true)`
+for parallel queries. The navigation functions (`element`, `outlink`, `members`, …,
+`newick`, `level_graph`) read the stored structure without the lock: they are safe
+alongside queries, not alongside `add!`, `delete!` or `bulk_add!`.
 """
 mutable struct HNNGIndex{S<:Union{VectorStore,ObjectStore},M}
     store::S
@@ -154,6 +162,7 @@ mutable struct HNNGIndex{S<:Union{VectorStore,ObjectStore},M}
     memo::DistMemo
     last_rewired::Int           # see HNNG.last_update_stats (Task 18)
     last_top::Int
+    lock::ReentrantLock         # held by every public call that searches, mutates, verifies or saves
 end
 
 const GUARD = 1e-6
@@ -167,14 +176,33 @@ function HNNGIndex(metric, dim::Integer; T::Type{<:AbstractFloat}=Float32,
     m = _wrap_metric(metric)
     s = VectorStore{T}(Int(dim))
     g = guard === nothing ? _default_guard(T, Int(dim)) : Float64(guard)
-    HNNGIndex(s, m, _is_metric_for(s, m), g, falses(0), 0, Level[], 0, DistMemo(), 0, 0)
+    HNNGIndex(s, m, _is_metric_for(s, m), g, falses(0), 0, Level[], 0, DistMemo(), 0, 0,
+              ReentrantLock())
 end
 
 function HNNGIndex(metric, ::Type{E}; guard::Union{Nothing,Real}=nothing) where {E}
     m = _wrap_metric(metric)
     s = ObjectStore{E}()
     g = guard === nothing ? GUARD : Float64(guard)
-    HNNGIndex(s, m, _is_metric_for(s, m), g, falses(0), 0, Level[], 0, DistMemo(), 0, 0)
+    HNNGIndex(s, m, _is_metric_for(s, m), g, falses(0), 0, Level[], 0, DistMemo(), 0, 0,
+              ReentrantLock())
+end
+
+"""
+    _locked(f, idx)
+
+Run `f()` holding `idx.lock`. Every public call that touches the shared query buffers
+`idx.memo` and the counter `idx.nevals`, or mutates, verifies or saves the index, runs
+inside: calls on one index are serialized (correct, not parallel). The lock is
+reentrant, so a locked call may call another public function.
+"""
+@inline function _locked(f::F, idx::HNNGIndex) where {F}
+    lock(idx.lock)
+    try
+        f()
+    finally
+        unlock(idx.lock)
+    end
 end
 
 _ntotal(idx::HNNGIndex) = length(idx.store)

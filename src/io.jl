@@ -10,7 +10,9 @@ Write the index with `Serialization`: store, tombstones, levels, guard and, for 
 VectorStore with a Distances.jl metric, the metric. An ObjectStore or a `UserMetric`
 index is saved without its metric; `load` then needs `metric=`.
 """
-function save(path::AbstractString, idx::HNNGIndex)
+save(path::AbstractString, idx::HNNGIndex) = _locked(() -> _save(path, idx), idx)
+
+function _save(path::AbstractString, idx::HNNGIndex)
     keep = idx.store isa VectorStore && !(idx.metric isa UserMetric)
     payload = (format=FORMAT, version=FORMAT_VERSION, store=idx.store,
                metric=keep ? idx.metric : nothing, guard=idx.guard, alive=idx.alive, levels=idx.levels)
@@ -38,7 +40,7 @@ function load(path::AbstractString; metric=nothing)
     m === nothing && throw(ArgumentError(
         "the index in $path has an ObjectStore or a UserMetric; pass metric= to load it"))
     HNNGIndex(p.store, m, _is_metric_for(p.store, m), p.guard, p.alive, count(p.alive), p.levels,
-              0, DistMemo(), 0, 0)
+              0, DistMemo(), 0, 0, ReentrantLock())
 end
 
 """
@@ -46,10 +48,13 @@ end
 
 `(n_live, n_total, nlevels, population, nclusters, mean_cluster_size, nevals)`:
 per-level population and cluster counts (index `l+1` is level `l`), and the distance
-evaluations made by `add!`, `delete!`, `bulk_add!` and the serial `knn` path since
-the last `reset_evals!`.
+evaluations made by `add!`, `delete!`, `bulk_add!` and the serial query path (`knn`,
+`HNNG.knn_counted`, `knn_batch` with `threads=false`) since the last `reset_evals!`.
+`knn_batch(...; threads=true)` and `HNNG.knn_levelsync` are not counted.
 """
-function stats(idx::HNNGIndex)
+stats(idx::HNNGIndex) = _locked(() -> _stats(idx), idx)
+
+function _stats(idx::HNNGIndex)
     pop = [lv.npop for lv in idx.levels]
     ncl = [lv.nclusters for lv in idx.levels]
     (n_live=length(idx), n_total=_ntotal(idx), nlevels=nlevels(idx), population=pop,
@@ -58,7 +63,7 @@ function stats(idx::HNNGIndex)
 end
 
 """Reset the distance-evaluation counter to 0."""
-reset_evals!(idx::HNNGIndex) = (idx.nevals = 0; idx)
+reset_evals!(idx::HNNGIndex) = _locked(() -> (idx.nevals = 0; idx), idx)
 
 """
     HNNG.last_update_stats(idx) -> (rewired, top_level_touched)

@@ -13,7 +13,9 @@ top; the live counter `nlive` behind `length`. Throws
 `ErrorException("HNNG.verify: ...")` naming the first violation.
 Distance evaluations made here are not counted. Assumes a symmetric distance.
 """
-function verify(idx::HNNGIndex)
+verify(idx::HNNGIndex) = _locked(() -> _verify(idx), idx)
+
+function _verify(idx::HNNGIndex)
     n = _ntotal(idx)
     length(idx.alive) == n || _fail("alive has length $(length(idx.alive)) but the store holds $n")
     if isempty(idx.levels)

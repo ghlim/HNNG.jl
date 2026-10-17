@@ -45,7 +45,9 @@ Remove a live element exactly (spec §6.4): tombstone the id, `unlink!` it from
 level 0 and propagate the representative delta. The id is never reused and its
 storage is kept. Deleting the last live element leaves an index with no levels.
 """
-function Base.delete!(idx::HNNGIndex, id::Integer)
+Base.delete!(idx::HNNGIndex, id::Integer) = _locked(() -> _delete!(idx, id), idx)
+
+function _delete!(idx::HNNGIndex, id::Integer)
     i = _check_live(idx, id)
     idx.last_rewired = 0
     idx.last_top = 0

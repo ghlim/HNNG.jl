@@ -44,8 +44,14 @@ index with BLAS. `HNNG.save(path, idx)` and `HNNG.load(path)` persist an index.
 guaranteed to load across Julia versions.
 
 `knn_batch(idx, Q, k)` answers the columns of `Q` at once. With `threads=true` it
-requires a thread-safe `UserMetric` and no concurrent mutation of the index, and it
-does not update the distance-evaluation counter.
+spreads them over `Threads.nthreads()` tasks, which needs a thread-safe `UserMetric`,
+and it does not update the distance-evaluation counter. Each index has a lock that
+`add!`, `delete!`, `bulk_add!`, `knn`, `knn_batch`, `verify` and `HNNG.save` hold for
+their whole duration, so calls on one index from several threads (for example `knn`
+inside `Threads.@threads`) are serialized: correct, not parallel. Use
+`knn_batch(idx, Q, k; threads=true)` for parallel queries. The navigation functions
+below read the stored structure without the lock: they are safe alongside queries,
+not alongside `add!`, `delete!` or `bulk_add!`.
 
 ## Any element, any distance
 

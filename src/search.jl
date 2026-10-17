@@ -67,8 +67,14 @@ all of them. Empty index: two empty vectors. Counts its evaluations in `nevals`.
 Ties are resolved in the index's internal Euclidean units (the units in which the
 k-th element is selected); after conversion to SqEuclidean or CosineDist units two
 distinct internal distances can print equal, and such a pair keeps its internal order.
+
+Holds the index lock for its whole duration: `knn` calls on one index from several
+threads (for example inside `Threads.@threads`) are serialized, correct but not
+parallel. Use `knn_batch(idx, Q, k; threads=true)` for parallel queries.
 """
-function knn(idx::HNNGIndex, q, k::Integer)
+knn(idx::HNNGIndex, q, k::Integer) = _locked(() -> _knn(idx, q, k), idx)
+
+function _knn(idx::HNNGIndex, q, k::Integer)
     _check_k(k)
     ids, d = _knn!(idx.memo, idx, _prepare(idx, q), Int(k))
     _flush!(idx)
@@ -79,9 +85,12 @@ end
     HNNG.knn_counted(idx, q, k) -> (ids, dists, nevals_this_query)
 
 `knn` plus the number of distance evaluations this query made (the benchmark's
-fraction evaluated is that number divided by `length(idx)`).
+fraction evaluated is that number divided by `length(idx)`). Holds the index lock,
+like `knn`.
 """
-function knn_counted(idx::HNNGIndex, q, k::Integer)
+knn_counted(idx::HNNGIndex, q, k::Integer) = _locked(() -> _knn_counted(idx, q, k), idx)
+
+function _knn_counted(idx::HNNGIndex, q, k::Integer)
     _check_k(k)
     # idx.memo.nevals is 0 here after any public call: add!, delete!, bulk_add!, knn,
     # knn_counted and the serial knn_batch all end with _flush!. It is not zeroed: a
@@ -100,8 +109,11 @@ The level-synchronous descent of the 2015 algorithm with the corrected, strict a
 guarded prune: at each level offer every candidate cluster's representative, prune
 clusters whose bound exceeds the k-th distance, descend into the survivors' children;
 at level 0 evaluate the survivors' members. A second oracle for the tests only.
+Holds the index lock, like `knn`.
 """
-function knn_levelsync(idx::HNNGIndex, q, k::Integer)
+knn_levelsync(idx::HNNGIndex, q, k::Integer) = _locked(() -> _knn_levelsync(idx, q, k), idx)
+
+function _knn_levelsync(idx::HNNGIndex, q, k::Integer)
     _check_k(k)
     qp = _prepare(idx, q)
     memo = _begin!(DistMemo(), _ntotal(idx))
@@ -158,11 +170,42 @@ end
 
 `knn` for every query: the columns of a matrix (VectorStore) or the elements of a
 vector (ObjectStore). Column `j` holds query `j`'s answer; when fewer than `k` live
-elements exist the tail is padded with id `0` and distance `Inf`. `threads=true`
-splits the queries over `Threads.nthreads()` tasks with private memos and does not
-update the index's evaluation counter.
+elements exist the tail is padded with id `0` and distance `Inf`.
+
+The calling task holds the index lock for the whole batch. `threads=false` answers the
+queries one after another and counts their evaluations in `nevals`. `threads=true`
+splits them over `Threads.nthreads()` tasks with private buffers, waits for every task
+(the lock is held until the last one finishes, so nothing mutates the index meanwhile),
+and does not update the evaluation counter; the metric is then called from several
+threads at once, so a `UserMetric` must be thread-safe. If a task throws, the first
+exception is rethrown after all tasks have finished.
 """
-function knn_batch(idx::HNNGIndex, Q, k::Integer; threads::Bool=false)
+knn_batch(idx::HNNGIndex, Q, k::Integer; threads::Bool=false) =
+    _locked(() -> _knn_batch(idx, Q, k, threads), idx)
+
+"""
+    _wait_all(tasks) -> first exception or nothing
+
+Wait until every task has finished, even when a task fails or the caller is
+interrupted, so a threaded batch never outlives the lock its caller holds.
+"""
+function _wait_all(tasks)
+    failed = nothing
+    for t in tasks
+        while true
+            try
+                wait(t)
+                break
+            catch err
+                failed === nothing && (failed = err)
+                istaskdone(t) && break
+            end
+        end
+    end
+    failed
+end
+
+function _knn_batch(idx::HNNGIndex, Q, k::Integer, threads::Bool)
     _check_k(k)
     qs = _queries(idx, Q)
     nq = length(qs)
@@ -171,6 +214,8 @@ function knn_batch(idx::HNNGIndex, Q, k::Integer; threads::Bool=false)
     nq == 0 && return ids, ds
     if threads
         chunks = collect(Iterators.partition(1:nq, cld(nq, Threads.nthreads())))
+        # The calling task holds idx.lock until every child has finished; children
+        # call internal functions only and never take the lock.
         tasks = map(chunks) do r
             Threads.@spawn begin
                 memo = DistMemo()
@@ -180,7 +225,8 @@ function knn_batch(idx::HNNGIndex, Q, k::Integer; threads::Bool=false)
                 end
             end
         end
-        foreach(wait, tasks)
+        err = _wait_all(tasks)
+        err === nothing || throw(err isa TaskFailedException ? err.task.exception : err)
     else
         for j in 1:nq
             a, b = _knn!(idx.memo, idx, qs[j], Int(k))

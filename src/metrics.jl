@@ -7,6 +7,8 @@ Wrap any callable `f(a, b) -> Real` as the index distance, for either store. Set
 `is_metric=true` only when `f` satisfies the triangle inequality: pruning then runs.
 Declaring a non-metric `f` with `is_metric=true` is the opt-in heuristic mode of the
 2015 ROS system: queries and inserts may miss neighbours and no error is raised.
+`knn_batch(...; threads=true)` calls `f` from several threads at once, so `f` must then
+be thread-safe.
 """
 struct UserMetric{F}
     f::F

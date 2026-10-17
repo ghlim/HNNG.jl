@@ -409,7 +409,8 @@ end
 Insert and return the new id(s). Vector input of any `Real` type is converted to the
 store's element type; a matrix is validated in full before anything is inserted.
 """
-add!(idx::HNNGIndex{<:VectorStore}, x::AbstractVector{<:Real}) = _insert!(idx, _prepare(idx, x))
+add!(idx::HNNGIndex{<:VectorStore}, x::AbstractVector{<:Real}) =
+    _locked(() -> _insert!(idx, _prepare(idx, x)), idx)
 
 """Throw `ArgumentError` unless the matrix `X` has one row per index dimension."""
 function _check_dim(idx::HNNGIndex{<:VectorStore}, X::AbstractMatrix)
@@ -419,7 +420,9 @@ function _check_dim(idx::HNNGIndex{<:VectorStore}, X::AbstractMatrix)
     nothing
 end
 
-function add!(idx::HNNGIndex{<:VectorStore}, X::AbstractMatrix{<:Real})
+add!(idx::HNNGIndex{<:VectorStore}, X::AbstractMatrix{<:Real}) = _locked(() -> _add_cols!(idx, X), idx)
+
+function _add_cols!(idx::HNNGIndex{<:VectorStore}, X::AbstractMatrix{<:Real})
     _check_dim(idx, X)
     cols = [_prepare(idx, view(X, :, j)) for j in axes(X, 2)]
     first = _ntotal(idx) + 1
@@ -429,9 +432,12 @@ function add!(idx::HNNGIndex{<:VectorStore}, X::AbstractMatrix{<:Real})
     first:_ntotal(idx)
 end
 
-add!(idx::HNNGIndex{ObjectStore{E}}, obj::E) where {E} = _insert!(idx, obj)
+add!(idx::HNNGIndex{ObjectStore{E}}, obj::E) where {E} = _locked(() -> _insert!(idx, obj), idx)
 
-function add!(idx::HNNGIndex{ObjectStore{E}}, objs::AbstractVector{<:E}) where {E}
+add!(idx::HNNGIndex{ObjectStore{E}}, objs::AbstractVector{<:E}) where {E} =
+    _locked(() -> _add_objs!(idx, objs), idx)
+
+function _add_objs!(idx::HNNGIndex{ObjectStore{E}}, objs::AbstractVector{<:E}) where {E}
     first = _ntotal(idx) + 1
     for o in objs
         _insert!(idx, o)
