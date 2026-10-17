@@ -8,4 +8,5 @@ using Test, HNNG
     include("updates.jl")
     include("objects.jl")
     include("order.jl")
+    include("navigate.jl")
 end
