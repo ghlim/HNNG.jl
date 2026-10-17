@@ -58,7 +58,15 @@ isdefined(@__MODULE__, :brute_knn) || include(joinpath(@__DIR__, "oracle.jl"))
     open(io -> HNNG.serialize(io, (a = 1,)), joinpath(dir, "x"), "w")
     @test_throws "$(joinpath(dir, "x")) is not an HNNG.jl index file" HNNG.load(joinpath(dir, "x"))
     # load of a file written with another index format version
-    p = open(HNNG.deserialize, joinpath(dir, "u"))
-    open(io -> HNNG.serialize(io, merge(p, (version = HNNG.FORMAT_VERSION + 1,))), joinpath(dir, "v"), "w")
+    payload = open(io -> (HNNG.deserialize(io); HNNG.deserialize(io)), joinpath(dir, "u"))
+    open(joinpath(dir, "v"), "w") do io
+        HNNG.serialize(io, (HNNG.FORMAT, HNNG.FORMAT_VERSION + 1))
+        HNNG.serialize(io, payload)
+    end
     @test_throws "format version $(HNNG.FORMAT_VERSION + 1)" HNNG.load(joinpath(dir, "v"); metric=um.metric)
+    # load of an empty file or of a metric= whose type differs from the saved metric
+    write(joinpath(dir, "empty"), UInt8[])
+    @test_throws "is not an HNNG.jl index file or is damaged" HNNG.load(joinpath(dir, "empty"))
+    HNNG.save(joinpath(dir, "e"), idx)
+    @test_throws "metric= gives CosineDist" HNNG.load(joinpath(dir, "e"); metric=CosineDist())
 end
