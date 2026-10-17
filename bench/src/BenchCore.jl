@@ -54,5 +54,6 @@ const SCHEMA_EXP2 = names(empty_exp2())
 const SCHEMA_EXP3 = names(empty_exp3())
 
 include("datasets.jl")
+include("recall.jl")
 
 end # module
