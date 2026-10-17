@@ -148,3 +148,12 @@ function newick(idx::HNNGIndex; labels=nothing)
     print(io, ";")
     String(take!(io))
 end
+
+"""
+    level_graph(idx, l) -> (g::SimpleDiGraph, weights::SparseMatrixCSC, ids::Vector{Int})
+
+Requires `using Graphs`. One vertex per level-`l` element (vertex `i` is `ids[i]`),
+one edge per outlink, weighted by the stored outlink distance (metric units), so
+`Graphs.dijkstra_shortest_paths(g, s, weights)` runs without a distance evaluation.
+"""
+function level_graph end

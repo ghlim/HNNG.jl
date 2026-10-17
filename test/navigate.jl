@@ -72,3 +72,35 @@ end
     leaves(big, root(big))
     @test big.nevals == n0
 end
+
+using Graphs, SparseArrays
+
+@testset "Graphs extension: level_graph and Dijkstra over stored distances" begin
+    rng = StableRNG(16)
+    idx = HNNGIndex(Euclidean(), 2; T=Float64)
+    stream!(idx, blobs(rng, Float64, 2, 80))
+    for l in 0:nlevels(idx)-1
+        g, W, ids = level_graph(idx, l)
+        @test nv(g) == length(ids) == idx.levels[l+1].npop
+        @test ne(g) == length(ids)
+        @test W isa SparseMatrixCSC
+        for (i, x) in enumerate(ids)
+            j = findfirst(==(outlink(idx, x; level=l)), ids)
+            @test has_edge(g, i, j) && W[i, j] == outlink_distance(idx, x; level=l)
+        end
+    end
+    g, W, ids = level_graph(idx, 0)
+    @test ids == 1:80
+    n0 = idx.nevals
+    st = dijkstra_shortest_paths(g, 1, W)
+    x, acc, seen = 1, 0.0, Set([1])
+    while true
+        y = outlink(idx, x)
+        acc += outlink_distance(idx, x)
+        y in seen && break
+        @test st.dists[y] ≈ acc
+        push!(seen, y)
+        x = y
+    end
+    @test idx.nevals == n0
+end
