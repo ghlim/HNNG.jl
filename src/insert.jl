@@ -411,10 +411,16 @@ store's element type; a matrix is validated in full before anything is inserted.
 """
 add!(idx::HNNGIndex{<:VectorStore}, x::AbstractVector{<:Real}) = _insert!(idx, _prepare(idx, x))
 
-function add!(idx::HNNGIndex{<:VectorStore}, X::AbstractMatrix{<:Real})
+"""Throw `ArgumentError` unless the matrix `X` has one row per index dimension."""
+function _check_dim(idx::HNNGIndex{<:VectorStore}, X::AbstractMatrix)
     d = dim(idx.store)
     size(X, 1) == d ||
         throw(ArgumentError("dimension mismatch: the index has dim $d, the matrix has $(size(X, 1)) rows"))
+    nothing
+end
+
+function add!(idx::HNNGIndex{<:VectorStore}, X::AbstractMatrix{<:Real})
+    _check_dim(idx, X)
     cols = [_prepare(idx, view(X, :, j)) for j in axes(X, 2)]
     first = _ntotal(idx) + 1
     for v in cols

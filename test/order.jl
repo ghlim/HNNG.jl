@@ -1,4 +1,5 @@
 isdefined(@__MODULE__, :brute_knn) || include(joinpath(@__DIR__, "oracle.jl"))
+using Distances: Cityblock
 
 @testset "five insertion orders give the same level-0 graph and clusters" begin
     rng = StableRNG(12)
@@ -59,4 +60,69 @@ end
     D = HNNGIndex(Euclidean(), 4; T=Float64)
     stream!(D, X[:, vcat(rest, S)])
     @test same_structure(structure(C, vcat(collect(1:n), S)), structure(D, vcat(rest, S)))
+end
+
+@testset "bulk_add! equals streaming add! in the same column order" begin
+    rng = StableRNG(19)
+    for (M, T, d, n, gen) in ((Euclidean(), Float64, 2, 300, blobs), (SqEuclidean(), Float32, 6, 250, gauss),
+                              (CosineDist(), Float32, 5, 200, gauss), (Cityblock(), Float64, 3, 150, blobs))
+        X = gen(rng, T, d, n)
+        S = HNNGIndex(M, d; T=T)
+        add!(S, X)
+        @test verify(S)
+        B = HNNGIndex(M, d; T=T)
+        @test bulk_add!(B, X) == 1:n
+        @test verify(B)
+        @test same_structure(structure(B), structure(S))
+        q = randn(rng, T, d)
+        @test knn(B, q, 5) == knn(S, q, 5)
+        @test B.nevals > 0
+        @test_throws ArgumentError bulk_add!(S, X)           # S has assigned ids
+    end
+    base = gauss(StableRNG(191), Float64, 3, 40)
+    S = HNNGIndex(Euclidean(), 3; T=Float64)
+    add!(S, hcat(base, base))                       # exact duplicates
+    @test verify(S)
+    B = HNNGIndex(Euclidean(), 3; T=Float64)
+    bulk_add!(B, hcat(base, base))
+    @test verify(B)
+    @test same_structure(structure(B), structure(S))
+    for p in (randperm(StableRNG(193), 80), randperm(StableRNG(194), 80))
+        Xp = hcat(base, base)[:, p]
+        S2 = HNNGIndex(Euclidean(), 3; T=Float64); add!(S2, Xp); @test verify(S2)
+        B2 = HNNGIndex(Euclidean(), 3; T=Float64); bulk_add!(B2, Xp); @test verify(B2)
+        @test same_structure(structure(B2), structure(S2))
+    end
+    @test bulk_add!(HNNGIndex(Euclidean(), 3), zeros(Float32, 3, 0)) == 1:0
+    one = HNNGIndex(Euclidean(), 3)
+    @test bulk_add!(one, ones(Float32, 3, 1)) == 1:1 && verify(one) && nlevels(one) == 1
+    # errors (spec §9, Spec assumption 8) and Task 18's stats contract
+    @test_throws ArgumentError bulk_add!(HNNGIndex(UserMetric(hausdorff; is_metric=true), Matrix{Float64}), zeros(1, 1))
+    @test_throws ArgumentError bulk_add!(HNNGIndex(Euclidean(), 3), zeros(Float32, 4, 5))
+    F = HNNGIndex(Euclidean(), 3)
+    @test bulk_add!(F, gauss(StableRNG(195), Float32, 3, 12)) == 1:12
+    @test verify(F)
+    @test HNNG.last_update_stats(F) == (rewired=0, top_level_touched=0)
+    for id in 1:12
+        delete!(F, id)
+        @test verify(F)
+    end
+    @test length(F) == 0
+    @test_throws ArgumentError bulk_add!(F, ones(Float32, 3, 1))   # drained, not fresh
+end
+
+@testset "bulk_add! then streaming updates" begin
+    rng = StableRNG(192)
+    B = HNNGIndex(Euclidean(), 4)
+    bulk_add!(B, gauss(rng, Float32, 4, 400))
+    @test verify(B)
+    for _ in 1:30
+        add!(B, randn(rng, Float32, 4))
+        @test verify(B)
+    end
+    for id in 1:15
+        delete!(B, id)
+        @test verify(B)
+    end
+    @test check_knn(B, randn(rng, Float32, 4), 10)
 end
