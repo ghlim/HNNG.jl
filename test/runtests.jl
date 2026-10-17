@@ -5,4 +5,5 @@ using Test, HNNG
     include("metrics.jl")
     include("invariants.jl")
     include("search.jl")
+    include("updates.jl")
 end

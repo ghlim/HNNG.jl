@@ -37,3 +37,27 @@ function unlink!(idx::HNNGIndex, e::Int, l::Int, floating::Vector{Int})
     lv.cluster_of[e] = 0
     _repair!(idx, l, affected, Int[], e, floating)
 end
+
+"""
+    delete!(idx, id) -> idx
+
+Remove a live element exactly (spec §6.4): tombstone the id, `unlink!` it from
+level 0 and propagate the representative delta. The id is never reused and its
+storage is kept. Deleting the last live element leaves an index with no levels.
+"""
+function Base.delete!(idx::HNNGIndex, id::Integer)
+    i = _check_live(idx, id)
+    idx.last_rewired = 0
+    idx.last_top = 0
+    idx.alive[i] = false
+    idx.nlive -= 1
+    delta = unlink!(idx, i, 0, Int[])
+    if idx.levels[1].npop == 0
+        idx.last_top = nlevels(idx) - 1
+        empty!(idx.levels)
+    else
+        propagate!(idx, delta..., 1)
+    end
+    _flush!(idx)
+    idx
+end
