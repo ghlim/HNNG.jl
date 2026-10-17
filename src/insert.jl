@@ -291,6 +291,61 @@ function link!(idx::HNNGIndex, e::Int, l::Int, floating::Vector{Int})
     _repair!(idx, l, affected, [e], 0, floating)
 end
 
+"""
+    _compose!(rm, ad, delta) -> (rm, ad)
+
+Net composition of representative deltas (spec §6.4): an element removed and
+re-added (or added and removed) within one step is no change.
+"""
+function _compose!(rm::Vector{Int}, ad::Vector{Int}, delta::Tuple{Vector{Int},Vector{Int}})
+    drm, dad = delta
+    for r in drm
+        k = findfirst(==(r), ad)
+        k === nothing ? push!(rm, r) : deleteat!(ad, k)
+    end
+    for a in dad
+        k = findfirst(==(a), rm)
+        k === nothing ? push!(ad, a) : deleteat!(rm, k)
+    end
+    rm, ad
+end
+
+"""
+    propagate!(idx, removed, added, l) -> idx
+
+Apply the net representative delta of level `l-1` to level `l` and climb (spec §6.4):
+stop on an empty delta; drop every level ≥ `l` when level `l-1` has one cluster;
+create level `l` from all representatives of level `l-1` when it does not exist;
+otherwise `unlink!` the removed and `link!` the added representatives in id order.
+"""
+function propagate!(idx::HNNGIndex, removed::Vector{Int}, added::Vector{Int}, l::Int)
+    while !(isempty(removed) && isempty(added))
+        below = idx.levels[l]
+        if below.nclusters == 1
+            idx.last_top = max(idx.last_top, nlevels(idx) - 1)
+            resize!(idx.levels, l)
+            return idx
+        end
+        if nlevels(idx) == l
+            push!(idx.levels, Level(_ntotal(idx)))
+            removed = Int[]
+            added = sort!([c.rep for c in below.clusters if c.rep != 0])
+        end
+        idx.last_top = max(idx.last_top, l)
+        floating = Int[]
+        rm, ad = Int[], Int[]
+        for r in sort(removed)
+            _compose!(rm, ad, unlink!(idx, r, l, floating))
+        end
+        for a in sort(added)
+            _compose!(rm, ad, link!(idx, a, l, floating))
+        end
+        removed, added = rm, ad
+        l += 1
+    end
+    idx
+end
+
 _flush!(idx::HNNGIndex) = (idx.nevals += idx.memo.nevals; idx.memo.nevals = 0; idx)
 
 function _insert!(idx::HNNGIndex, v)
@@ -303,7 +358,7 @@ function _insert!(idx::HNNGIndex, v)
         _grow!(lv, id)
     end
     isempty(idx.levels) && push!(idx.levels, Level(id))
-    link!(idx, id, 0, Int[])
+    propagate!(idx, link!(idx, id, 0, Int[])..., 1)
     _flush!(idx)
     id
 end

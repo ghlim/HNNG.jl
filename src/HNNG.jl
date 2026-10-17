@@ -9,6 +9,7 @@ include("types.jl")
 include("kernels.jl")
 include("metrics.jl")
 include("insert.jl")
+include("delete.jl")
 include("navigate.jl")
 include("verify.jl")
 

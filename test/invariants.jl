@@ -166,7 +166,7 @@ end
         X = gauss(rng, T, d, n)
         for j in 1:n
             @test add!(idx, view(X, :, j)) == j
-            @test HNNG._verify_level(idx, 0)
+            @test verify(idx)
         end
         @test length(idx) == n
         @test idx.levels[1].npop == n
@@ -177,23 +177,66 @@ end
     idx = HNNGIndex(Euclidean(), 1; T=Float64)
     for x in (0.0, 1.0, 10.0, 11.0)
         add!(idx, [x])
-        @test HNNG._verify_level(idx, 0)
+        @test verify(idx)
     end
     lv = idx.levels[1]
     @test lv.outlink == [2, 1, 4, 3]
     @test lv.inlinks == [[2], [1], [4], [3]]
     @test sort([c.rep for c in lv.clusters if c.rep != 0]) == [1, 3]
+
+    # Hand case: 0, 1, 4, 6, 7, then 2.4 (ids 1..6 in insertion order). Before the last
+    # insert: 1 <-> 2 (rep 1) and 3 -> 4 <-> 5 (rep 4). 6 links to 2 (distance 1.4) and
+    # rewires 3 (1.6 < 2.0, its old outlink 4): clusters {1,2,3,6} (rep 2, two inlinks;
+    # radius M(2,3) = 3.0, maxout 1.6) and {4,5} (rep 4, equal sums, smaller id).
+    # Level-0 representative delta: ([1], [2]); one element rewired.
+    pts = (0.0, 1.0, 4.0, 6.0, 7.0)
+    idx = HNNGIndex(Euclidean(), 1; T=Float64)
+    for x in pts
+        add!(idx, [x])
+        @test verify(idx)
+    end
+    # the steps of _insert!, with link!'s return value kept
+    idx.last_rewired = 0
+    idx.last_top = 0
+    id = HNNG._append!(idx.store, [2.4])
+    push!(idx.alive, true)
+    idx.nlive += 1
+    foreach(lv -> HNNG._grow!(lv, id), idx.levels)
+    delta = HNNG.link!(idx, id, 0, Int[])
+    @test id == 6
+    @test delta == ([1], [2])
+    @test idx.last_rewired == 1
+    HNNG.propagate!(idx, delta..., 1)
+    HNNG._flush!(idx)
+    @test verify(idx)
+    lv = idx.levels[1]
+    cl = sort([c for c in lv.clusters if c.rep != 0]; by=c -> c.members)
+    @test [c.members for c in cl] == [[1, 2, 3, 6], [4, 5]]
+    @test [c.rep for c in cl] == [2, 4]
+    @test cl[1].radius == 3.0 && cl[1].maxout == [1.6]
+    # the same insert through add!
+    ref = HNNGIndex(Euclidean(), 1; T=Float64)
+    for x in (pts..., 2.4)
+        add!(ref, [x])
+        @test verify(ref)
+    end
+    @test ref.last_rewired == 1
+    @test same_structure(structure(ref), structure(idx); rtol=0)
 end
 
 @testset "add! accepts any real input on a Float32 index" begin   # Review Focus 3
     idx = HNNGIndex(Euclidean(), 3)
     @test add!(idx, [1, 2, 3]) == 1
+    @test verify(idx)
     @test add!(idx, [0.5, 0.25, 2.0]) == 2
+    @test verify(idx)
     M = [1.0 4.0; 2.0 5.0; 3.5 6.0]
     @test add!(idx, M) == 3:4
+    @test verify(idx)
     @test add!(idx, view(permutedims(M), 2, :)) == 5
+    @test verify(idx)
     @test add!(idx, Float16[1, 1, 1]) == 6
-    @test HNNG._verify_level(idx, 0)
+    @test verify(idx)
     @test element(idx, 1) == Float32[1, 2, 3]
     @test element(idx, 5) == Float32[4, 5, 6]
     @test eltype(element(idx, 2)) == Float32
@@ -202,7 +245,50 @@ end
 @testset "add! on an ObjectStore" begin
     idx = HNNGIndex(UserMetric((a, b) -> abs(a - b); is_metric=true), Float64)
     @test add!(idx, 3.0) == 1
+    @test verify(idx)
     @test add!(idx, [1.0, 7.5, 2.0]) == 2:4
-    @test HNNG._verify_level(idx, 0)
+    @test verify(idx)
     @test element(idx, 3) == 7.5
+end
+
+@testset "hierarchy: four points on a line" begin
+    idx = HNNGIndex(Euclidean(), 1; T=Float64)
+    stream!(idx, reshape([0.0, 1.0, 10.0, 11.0], 1, :))
+    @test nlevels(idx) == 2
+    top = idx.levels[2]
+    c = only([c for c in top.clusters if c.rep != 0])
+    @test c.members == [1, 3] && c.rep == 1
+    @test c.radius == 11.0
+    @test c.maxout == [1.0, 10.0]
+    @test top.outlink[1] == 3 && top.outlink[3] == 1
+end
+
+@testset "hierarchy: streaming inserts keep every invariant at every level" begin
+    rng = StableRNG(6)
+    for (T, d, n, gen) in ((Float64, 2, 150, gauss), (Float32, 3, 120, blobs), (Float64, 8, 80, gauss))
+        idx = HNNGIndex(Euclidean(), d; T=T)
+        stream!(idx, gen(rng, T, d, n))
+        @test length(idx) == n
+        @test nlevels(idx) >= 2
+    end
+end
+
+@testset "hierarchy: unlink! then link! of any element is the identity" begin
+    rng = StableRNG(66)
+    idx = HNNGIndex(Euclidean(), 2; T=Float64)
+    stream!(idx, gauss(rng, Float64, 2, 40))
+    snap = structure(idx)
+    for e in 1:40
+        HNNG.propagate!(idx, HNNG.unlink!(idx, e, 0, Int[])..., 1)
+        HNNG.propagate!(idx, HNNG.link!(idx, e, 0, Int[])..., 1)
+        @test verify(idx)
+        @test same_structure(structure(idx), snap)
+    end
+end
+
+@testset "net composition of representative deltas" begin
+    rm, ad = Int[], Int[]
+    HNNG._compose!(rm, ad, ([5], [7]))
+    HNNG._compose!(rm, ad, ([7, 9], [5, 11]))
+    @test sort(rm) == [9] && sort(ad) == [11]
 end
