@@ -1,3 +1,4 @@
+isdefined(@__MODULE__, :brute_knn) || include(joinpath(@__DIR__, "oracle.jl"))
 using Test, HNNG, StableRNGs
 using Distances: Cityblock, CorrDist
 
@@ -141,13 +142,14 @@ end
 Reference for `_euclid`, written out with plain scalar loops in the kernel's fixed order:
 `W` lanes (8, or 4 for `Float64`) × 4 accumulators over blocks of `4W`, then blocks of
 `W` into accumulator 1, lane-wise `(c1 + c2) + (c3 + c4)`, halving tree
-`v[l] + v[l + W/2]`, then the `n mod W` tail left to right.
+`v[l] + v[l + W/2]`, then the `n mod W` tail left to right. `Float16` inputs are
+widened to `Float32` first and accumulate in `Float32`.
 """
 function ref_euclid(a::AbstractVector{T}, b::AbstractVector{T}) where {T}
-    x, y = collect(a), collect(b)
+    x, y = T === Float16 ? (Float32.(a), Float32.(b)) : (collect(a), collect(b))
     n = length(x)
     W = T === Float64 ? 4 : 8
-    acc = zeros(T, W, 4)                       # acc[l, c]: lane l of accumulator c
+    acc = zeros(eltype(x), W, 4)               # acc[l, c]: lane l of accumulator c
     i = 0
     while i + 4W <= n
         for c in 1:4, l in 1:W                 # lane l of c_j takes coordinate i + (j-1)W + l
@@ -222,12 +224,48 @@ mixed(rng, ::Type{T}, dims...) where {T} = T.(randn(rng, dims...) .* exp2.(rand(
         end
         @test differs
     end
-    # any other float type takes the scalar path with the same lane map (W = 8)
+    # Float16 runs the Float32 lanes on widened values (W = 8); the same bits at every call site
     H = mixed(rng, Float16, 37, 2)
     @test HNNG._euclid(H[:, 1], view(H, :, 2)) === ref_euclid(H[:, 1], H[:, 2]) === HNNG._euclid(H[:, 2], H[:, 1])
+    Hs = zeros(Float16, 74, 2); Hs[1:2:end, :] = H
+    @test HNNG._euclid(view(Hs, 1:2:74, 1), view(H, :, 2)) === ref_euclid(H[:, 1], H[:, 2])
+    # any other float type takes the scalar path with the same lane map (W = 8)
+    B = big.(mixed(rng, Float64, 37, 2))
+    @test HNNG._euclid(B[:, 1], B[:, 2]) == ref_euclid(B[:, 1], B[:, 2])
     @test HNNG._euclid(Float32[], Float32[]) === 0.0 === HNNG._euclid(view(zeros(0, 1), :, 1), Float64[])
     @test_throws DimensionMismatch HNNG._euclid(zeros(3), zeros(4))
     @test_throws DimensionMismatch HNNG._euclid(zeros(Float32, 3), view(zeros(Float32, 8), 1:2:8))
+end
+
+@testset "Float16 data accumulates in Float32 (8-bit pixels)" begin
+    rng = StableRNG(64)
+    P = rand(rng, 0:255, 64, 300)                    # 8-bit pixels: Float16 holds them exactly
+    Q = rand(rng, 0:255, 64, 25)
+    for M in (Euclidean(), CosineDist())
+        h = HNNGIndex(M, 64; T=Float16)
+        add!(h, P)                                   # streaming
+        @test verify(h)
+        b = HNNGIndex(M, 64; T=Float16)
+        bulk_add!(b, P)                              # bulk (direct path for Float16)
+        @test verify(b)
+        @test same_structure(structure(b), structure(h))
+        f = HNNGIndex(M, 64; T=Float32)
+        add!(f, P)
+        @test verify(f)
+        for j in axes(Q, 2)
+            ids, ds = knn(h, Q[:, j], 5)
+            @test all(isfinite, ds) && ds[1] > 0
+            @test ids == knn(f, Q[:, j], 5)[1]
+            @test knn(b, Q[:, j], 5) == (ids, ds)
+            @test check_knn(h, Q[:, j], 5)
+        end
+    end
+    # pixel distances are integers below 2^24, so Float16 storage loses nothing under Euclidean
+    e16, e32 = HNNGIndex(Euclidean(), 64; T=Float16), HNNGIndex(Euclidean(), 64)
+    @test HNNG.distance(e16, P[:, 1], P[:, 2]) === HNNG.distance(e32, P[:, 1], P[:, 2])
+    # the cosine normalisation sums in Float32: a pixel vector keeps unit length
+    c16 = HNNGIndex(CosineDist(), 64; T=Float16)
+    @test isapprox(sum(abs2, Float64.(HNNG._prepare(c16, P[:, 1]))), 1.0; atol=1e-2)
 end
 
 @testset "units and input preparation" begin

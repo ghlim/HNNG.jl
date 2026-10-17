@@ -1,4 +1,5 @@
-# Distance kernels (spec §5): Float32 data accumulates in Float32, the result is widened.
+# Distance kernels (spec §5): Float32 data accumulates in Float32, Float16 data is widened
+# and accumulates in Float32, Float64 in Float64; the result is widened to Float64.
 #
 # Explicit SIMD vectors built from `NTuple{W,VecElement{T}}` with `Base.llvmcall` for
 # fsub/fmul/fadd (Core/Base only). The summation order is spelled out in `_euclid`'s
@@ -32,6 +33,9 @@ _vtype(::Type{Float64}) = _V4d
 @inline _vload(::Type{V}, p::Ptr{T}, k::Int) where {V,T} = unsafe_load(Ptr{V}(p + k * sizeof(T)))
 @inline _vload(::Type{NTuple{W,VecElement{T}}}, a::AbstractVector{T}, k::Int) where {W,T} =
     ntuple(l -> VecElement(@inbounds a[firstindex(a) + k + l - 1]), Val(W))
+# Float16: the same W getindex lanes, each widened (exactly) to Float32.
+@inline _vload(::Type{_V8f}, a::AbstractVector{Float16}, k::Int) =
+    ntuple(l -> VecElement(Float32(@inbounds a[firstindex(a) + k + l - 1])), Val(8))
 
 @inline function _vsq(acc::V, x::V, y::V) where {V}
     t = _vsub(x, y)
@@ -46,7 +50,9 @@ end
 end
 
 # `pa`, `pb` are pointers (dense path) or the arrays themselves (generic path);
-# `a`, `b` are always the arrays (used for the scalar tail).
+# `a`, `b` are always the arrays (used for the scalar tail). The tail converts each
+# coordinate to the lane type `T` first: the identity for Float32/Float64 data, the
+# Float16 -> Float32 widening for Float16 data.
 @inline function _euclid_core(::Type{V}, pa, pb, a, b, n::Int) where {W,T,V<:NTuple{W,VecElement{T}}}
     z = ntuple(_ -> VecElement(zero(T)), Val(W))
     c1 = c2 = c3 = c4 = z
@@ -66,13 +72,13 @@ end
     oa, ob = firstindex(a) - 1, firstindex(b) - 1
     while i < n
         i += 1
-        t = @inbounds(a[oa + i]) - @inbounds(b[ob + i])
+        t = T(@inbounds(a[oa + i])) - T(@inbounds(b[ob + i]))
         s += t * t
     end
     s
 end
 
-# Same order for any other float type (Float16, BigFloat, …), in plain scalar code, W = 8.
+# Same order for any other float type (BigFloat, …), in plain scalar code, W = 8.
 function _euclid_scalar(a::AbstractVector{T}, b::AbstractVector{T}, W::Int) where {T}
     n = length(a)
     oa, ob = firstindex(a) - 1, firstindex(b) - 1
@@ -110,14 +116,16 @@ end
 """
     _euclid(a, b) -> Float64
 
-Euclidean distance accumulated in the element type `T`, widened to `Float64`, square
-root taken in `Float64`. The summation order is fixed by the code (no `@simd`,
+Euclidean distance accumulated in the element type `T` (`Float16` data in `Float32`),
+widened to `Float64`, square root taken in `Float64`. The summation order is fixed by the code (no `@simd`,
 `@fastmath`, `fma`/`muladd`), so the bits do not depend on inlining, `--check-bounds`,
 argument types (Vector, contiguous or strided view), Julia version or CPU.
 
 Order, with `W = 8` lanes for `Float32` (and any other `T` except `Float64`), `W = 4`
 for `Float64`, and coordinates numbered `1 … n` (`n = length(a)`). Every term is
-`t = a[k] - b[k]` then `t * t`, each rounded separately, added to its accumulator:
+`t = a[k] - b[k]` then `t * t`, each rounded separately, added to its accumulator
+(for `Float16`, `a[k]` and `b[k]` are first widened to `Float32` and every operation
+below is a `Float32` operation):
 
 1. Four accumulators `c1 … c4` of `W` lanes each, all `+0`. Blocks of `4W`
    coordinates starting at `i+1`: lane `l` of `c_j` gets coordinate `i + (j-1)W + l`.
@@ -132,8 +140,11 @@ for `Float64`, and coordinates numbered `1 … n` (`n = length(a)`). Every term 
 Swapping `a` and `b` gives the same bits (each term is the square of an exact
 negation). When both inputs are `StridedVector`s with `stride(x, 1) == 1` (`Vector`,
 contiguous views, reshapes) the lanes are filled by unaligned vector loads through
-`pointer` (inside `GC.@preserve`); any other `AbstractVector` builds the same lanes
-with `getindex`, and gets the same bits. Throws `DimensionMismatch` if the lengths
+`pointer` (inside `GC.@preserve`); this assumes `pointer` addresses host memory, which
+holds for every vector the index passes (`_prepare` copies all input into a host
+`Vector{T}`, and stored elements are columns of a host `Matrix{T}`). Any other
+`AbstractVector`, and every `Float16` vector, builds the same lanes with `getindex`
+and gets the same bits. Throws `DimensionMismatch` if the lengths
 differ; any length `≥ 0` and any `firstindex` is accepted.
 """
 @inline function _euclid(a::AbstractVector{T}, b::AbstractVector{T}) where {T<:AbstractFloat}
@@ -146,6 +157,8 @@ differ; any length `≥ 0` and any `firstindex` is accepted.
         else
             _euclid_core(V, a, b, a, b, n)
         end
+    elseif T === Float16
+        _euclid_core(_V8f, a, b, a, b, n)     # widened getindex lanes, Float32 sums
     else
         _euclid_scalar(a, b, 8)
     end
@@ -177,14 +190,15 @@ roundings per term); `sqrt` is monotone, so `δ_{j*} ≤ δ_{j₀}` gives
 `τ = 2γ_h + 3eps(Float64) < (d ÷ 16 + 20)·eps(T)`. (3) Hence `sq_{j*} ≤ s_{j*} + E ≤
 a + τ·|a| + 2E(1+τ) + 2.1d·u_sub ≤ L`. The bound assumes no overflow: when
 `8N ≥ floatmax(T)` the direct path runs instead. It also assumes
-`eps(T) ≥ eps(Float64)` (the norms and the combine round in `Float64`), so only
-`T ∈ {Float16, Float32, Float64}` takes the Gram path; any other `T` (e.g. `BigFloat`)
-runs the direct path. A row whose candidate list stays longer than `max(64, m ÷ 4)`
+`eps(T) ≥ eps(Float64)` (the norms and the combine round in `Float64`) and a kernel that
+accumulates in `T`, so only `T ∈ {Float32, Float64}` takes the Gram path; any other `T`
+(`Float16`, which the kernel accumulates in `Float32`, or `BigFloat`) runs the direct
+path. A row whose candidate list stays longer than `max(64, m ÷ 4)`
 (norms far above the distances) drops its list and is re-ranked by a direct scan over
 all `j ≠ i`. Counts `m(m−1)` Gram pairs plus every re-rank in `idx.nevals`.
 """
 function _allpairs_nn_blas(idx::HNNGIndex{VectorStore{T}}, pop::Vector{Int}) where {T}
-    T <: Union{Float16,Float32,Float64} || return _allpairs_nn_direct(idx, pop)
+    T <: Union{Float32,Float64} || return _allpairs_nn_direct(idx, pop)
     m = length(pop)
     d = dim(idx.store)
     P = Matrix{T}(undef, d, m)

@@ -59,7 +59,7 @@ end
 
 VectorStore: check the length and finiteness of `x`, convert to `Vector{T}`, and
 normalise to unit length under `CosineDist` (`x / (‖x‖ + 1e-30)`, so a zero vector
-stays zero). ObjectStore: `x` unchanged.
+stays zero; the sum of squares runs in at least `Float32`). ObjectStore: `x` unchanged.
 """
 function _prepare(idx::HNNGIndex{VectorStore{T}}, x::AbstractVector{<:Real}) where {T}
     d = dim(idx.store)
@@ -77,11 +77,12 @@ _prepare(::HNNGIndex{<:ObjectStore}, x) = x
 
 _normalize!(::HNNGIndex, v) = v
 function _normalize!(::HNNGIndex{VectorStore{T},<:CosineDist}, v::Vector{T}) where {T<:AbstractFloat}
-    s = zero(T)
+    S = promote_type(T, Float32)             # Float16 sums in Float32; S == T otherwise
+    s = zero(S)
     for x in v
-        s += x * x
+        s += S(x) * S(x)
     end
-    v .*= one(T) / (sqrt(s) + T(1e-30))
+    v .*= one(S) / (sqrt(s) + S(1e-30))
     v
 end
 
