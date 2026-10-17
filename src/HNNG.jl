@@ -3,11 +3,13 @@ module HNNG
 using Distances: Distances, PreMetric, Metric, Euclidean, SqEuclidean, CosineDist
 
 export HNNGIndex, UserMetric, Euclidean, SqEuclidean, CosineDist
-export is_metric, nlevels, element
+export is_metric, nlevels, element, verify
 
 include("types.jl")
 include("kernels.jl")
 include("metrics.jl")
+include("insert.jl")
 include("navigate.jl")
+include("verify.jl")
 
 end # module
