@@ -1,5 +1,5 @@
 using Test, HNNG
 
 @testset "HNNG.jl" begin
-    @test HNNG isa Module
+    include("metrics.jl")
 end
