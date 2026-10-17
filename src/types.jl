@@ -178,12 +178,19 @@ const GUARD = 1e-6
 """Default relative prune guard of a VectorStore index: `max(1e-6, 4·d·eps(T))`."""
 _default_guard(::Type{T}, d::Int) where {T<:AbstractFloat} = max(GUARD, 4 * d * Float64(eps(T)))
 
+"""A user-given guard as `Float64`; `ArgumentError` unless it is finite and ≥ 0."""
+function _check_guard(guard::Real)
+    g = Float64(guard)
+    isfinite(g) && g >= 0 || throw(ArgumentError("guard must be finite and >= 0, got $guard"))
+    g
+end
+
 function HNNGIndex(metric, dim::Integer; T::Type{<:AbstractFloat}=Float32,
                    guard::Union{Nothing,Real}=nothing)
     dim >= 1 || throw(ArgumentError("dim must be at least 1, got $dim"))
     m = _wrap_metric(metric)
     s = VectorStore{T}(Int(dim))
-    g = guard === nothing ? _default_guard(T, Int(dim)) : Float64(guard)
+    g = guard === nothing ? _default_guard(T, Int(dim)) : _check_guard(guard)
     HNNGIndex(s, m, _is_metric_for(s, m), g, falses(0), 0, Level[], 0, DistMemo(), 0, 0,
               false, ReentrantLock())
 end
@@ -191,7 +198,7 @@ end
 function HNNGIndex(metric, ::Type{E}; guard::Union{Nothing,Real}=nothing) where {E}
     m = _wrap_metric(metric)
     s = ObjectStore{E}()
-    g = guard === nothing ? GUARD : Float64(guard)
+    g = guard === nothing ? GUARD : _check_guard(guard)
     HNNGIndex(s, m, _is_metric_for(s, m), g, falses(0), 0, Level[], 0, DistMemo(), 0, 0,
               false, ReentrantLock())
 end

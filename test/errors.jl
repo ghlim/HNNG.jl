@@ -5,6 +5,12 @@ isdefined(@__MODULE__, :brute_knn) || include(joinpath(@__DIR__, "oracle.jl"))
     add!(idx, Float32[1 2 3; 4 5 6; 7 8 9])
     @test verify(idx)
     @test_throws "dim must be at least 1, got 0" HNNGIndex(Euclidean(), 0)
+    # an invalid prune guard (both constructors)
+    for g in (-0.5, -1, NaN, Inf, -Inf)
+        @test_throws "guard must be finite and >= 0, got" HNNGIndex(Euclidean(), 3; guard=g)
+        @test_throws ArgumentError HNNGIndex(UserMetric((a, b) -> abs(a - b)), Float64; guard=g)
+    end
+    @test HNNGIndex(Euclidean(), 3; guard=0).guard === 0.0
     # dimension mismatch on add! and knn
     @test_throws "the input has length 2" add!(idx, [1.0, 2.0])
     @test_throws "the matrix has 2 rows" add!(idx, ones(2, 4))
