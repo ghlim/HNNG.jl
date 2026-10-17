@@ -52,4 +52,5 @@ include(joinpath(@__DIR__, "setup.jl"))
         @test min_match(X, Q, gd, [([1, 2], [0.0, 0.0]), ([4, 2], [0.0, 0.0])], 2) == 0.5
     end
     include("test_timing.jl")
+    include("test_baselines.jl")
 end

@@ -56,5 +56,6 @@ const SCHEMA_EXP3 = names(empty_exp3())
 include("datasets.jl")
 include("recall.jl")
 include("timing.jl")
+include("baselines.jl")
 
 end # module
