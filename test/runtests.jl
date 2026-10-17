@@ -11,4 +11,5 @@ using Test, HNNG
     include("navigate.jl")
     include("io.jl")
     include("parity_cpp.jl")
+    include("errors.jl")
 end
