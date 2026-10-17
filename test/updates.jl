@@ -58,3 +58,51 @@ end
     end
     @test nlevels(idx) == 1
 end
+
+@testset "random interleaved inserts and deletes stay exact" begin
+    rng = StableRNG(13)
+    for (M, T, d) in ((Euclidean(), Float64, 2), (SqEuclidean(), Float32, 5), (CosineDist(), Float64, 3))
+        idx = HNNGIndex(M, d; T=T)
+        live = Int[]
+        for _ in 1:300
+            if isempty(live) || rand(rng) < 0.6
+                push!(live, add!(idx, randn(rng, T, d)))
+            else
+                delete!(idx, popat!(live, rand(rng, 1:length(live))))
+            end
+            @test verify(idx)
+            @test length(idx) == length(live)
+            @test check_knn(idx, randn(rng, T, d), 4)
+        end
+    end
+end
+
+@testset "deleting copies of duplicated points" begin      # Review Focus 1
+    rng = StableRNG(131)
+    base = gauss(rng, Float32, 2, 20)
+    idx = HNNGIndex(Euclidean(), 2)
+    stream!(idx, hcat(base, base, base))
+    for j in 1:20
+        delete!(idx, j + 20 * rand(rng, 0:2))
+        @test verify(idx)
+    end
+    for j in 1:20
+        ids, ds = knn(idx, base[:, j], 2)
+        @test ds == [0.0, 0.0] && all(i -> mod1(i, 20) == j, ids) && issorted(ids)
+        @test check_knn(idx, base[:, j], 5)
+    end
+end
+
+@testset "delete everything and re-insert gives the same structure" begin
+    rng = StableRNG(132)
+    X = blobs(rng, Float64, 3, 90)
+    idx = HNNGIndex(Euclidean(), 3; T=Float64)
+    stream!(idx, X)
+    ref = structure(idx)
+    for id in randperm(rng, 90)
+        delete!(idx, id); verify(idx)
+    end
+    @test nlevels(idx) == 0
+    stream!(idx, X)
+    @test same_structure(structure(idx, vcat(1:90, 1:90)), ref)
+end
