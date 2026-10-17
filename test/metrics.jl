@@ -137,6 +137,47 @@ end
     end
 end
 
+"""Reference for `_euclid`, written out with plain scalar loops in the kernel's fixed order."""
+function ref_euclid(x::Vector{T}, y::Vector{T}) where {T}
+    n, K = length(x), 8
+    nb = div(n, K)
+    acc = zeros(T, K)
+    for blk in 0:nb-1, j in 1:K               # lane j takes coordinates j, j+8, j+16, ...
+        t = x[blk*K+j] - y[blk*K+j]
+        acc[j] = acc[j] + t * t
+    end
+    s = ((acc[1] + acc[2]) + (acc[3] + acc[4])) + ((acc[5] + acc[6]) + (acc[7] + acc[8]))
+    for i in nb*K+1:n                          # tail, left to right
+        t = x[i] - y[i]
+        s = s + t * t
+    end
+    sqrt(Float64(T(s)))
+end
+
+@testset "kernel bits are call-site independent" begin
+    rng = StableRNG(31)
+    for T in (Float32, Float64), d in (1, 7, 8, 9, 31, 32, 33, 784)
+        X = randn(rng, T, d, 2) .* T(3)
+        x, y = X[:, 1], X[:, 2]
+        k = HNNG._euclid(x, y)
+        @test k === HNNG._euclid(view(X, :, 1), view(X, :, 2)) === HNNG._euclid(y, x)
+        @test k === HNNG._euclid(x, view(X, :, 2)) === HNNG._euclid(view(X, :, 1), y)
+        @test k === ref_euclid(x, y)
+    end
+    # the reference detects a reordering: a plain left-to-right sum differs somewhere
+    differs = false
+    for _ in 1:200
+        x, y = randn(rng, Float32, 784), randn(rng, Float32, 784)
+        seq = zero(Float32)
+        for i in 1:784
+            seq += (x[i] - y[i])^2
+        end
+        differs |= sqrt(Float64(seq)) !== ref_euclid(x, y)
+    end
+    @test differs
+    @test_throws DimensionMismatch HNNG._euclid(zeros(3), zeros(4))
+end
+
 @testset "units and input preparation" begin
     e = HNNGIndex(Euclidean(), 2; T=Float64)
     s = HNNGIndex(SqEuclidean(), 2; T=Float64)
