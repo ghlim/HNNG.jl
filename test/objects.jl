@@ -2,7 +2,7 @@ isdefined(@__MODULE__, :brute_knn) || include(joinpath(@__DIR__, "oracle.jl"))
 
 @testset "ObjectStore: Hausdorff on variable-size descriptor sets (pruned, exact)" begin
     rng = StableRNG(11)
-    S = descriptor_sets(rng, 3, 80)
+    S = descriptor_sets(rng, 3, HNNG_SLOW ? 80 : 40)        # 80 sets only with HNNG_SLOW=1
     idx = HNNGIndex(UserMetric(hausdorff; is_metric=true), Matrix{Float64})
     @test is_metric(idx)
     for s in S
@@ -22,7 +22,7 @@ end
 
 @testset "ObjectStore: 2015 ROS view distance (not a metric: unpruned, exact)" begin
     rng = StableRNG(111)
-    S = descriptor_sets(rng, 4, 70)
+    S = descriptor_sets(rng, 4, HNNG_SLOW ? 70 : 35)        # 70 sets only with HNNG_SLOW=1
     idx = HNNGIndex(ros_view_distance, Matrix{Float64})   # bare function -> UserMetric(is_metric=false)
     @test !is_metric(idx)
     for s in S
@@ -40,7 +40,7 @@ end
     rng = StableRNG(112)
     hamming(a, b) = count(i -> a[i] != b[i], eachindex(a))
     alphabet = ['a', 'c', 'g', 't']
-    words = [String(rand(rng, alphabet, 6)) for _ in 1:90]
+    words = [String(rand(rng, alphabet, 6)) for _ in 1:(HNNG_SLOW ? 90 : 45)]   # 90 words only with HNNG_SLOW=1
     idx = HNNGIndex(UserMetric(hamming; is_metric=true), String)
     for w in words
         add!(idx, w)

@@ -1,6 +1,9 @@
 # Shared test helpers: brute-force oracle, data generators, structure snapshots.
 using Test, HNNG, StableRNGs, Random, LinearAlgebra
 
+"""`HNNG_SLOW=1` also runs the largest parameter cases (spec §10: the default suite stays well under a minute)."""
+const HNNG_SLOW = get(ENV, "HNNG_SLOW", "0") == "1"
+
 """Exhaustive k-NN over the live elements with the package kernel: (distance, id) order, user units."""
 function brute_knn(idx, q, k)
     qp = HNNG._prepare(idx, q)

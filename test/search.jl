@@ -3,7 +3,7 @@ isdefined(@__MODULE__, :brute_knn) || include(joinpath(@__DIR__, "oracle.jl"))
 @testset "knn equals the brute-force oracle (Euclidean family)" begin
     rng = StableRNG(8)
     for M in (Euclidean(), SqEuclidean(), CosineDist()), T in (Float32, Float64),
-        d in (2, 8, 32), n in (1, 2, 50, 2000)
+        d in (2, 8, 32), n in (HNNG_SLOW ? (1, 2, 50, 300, 2000) : (1, 2, 50, 300))   # n = 2000 only with HNNG_SLOW=1
         idx = HNNGIndex(M, d; T=T)
         add!(idx, gauss(rng, T, d, n))
         @test verify(idx)
