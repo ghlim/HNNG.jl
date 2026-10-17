@@ -10,4 +10,5 @@ using Test, HNNG
     include("order.jl")
     include("navigate.jl")
     include("io.jl")
+    include("parity_cpp.jl")
 end
