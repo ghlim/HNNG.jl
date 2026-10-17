@@ -80,9 +80,10 @@ function _scan_level(idx::HNNGIndex, q, l::Int, ex1::Int, ex2::Int)
     lv = idx.levels[l+1]
     nn, nnd = 0, Inf
     cands = Int[]
+    qid = ex2 != 0 ? ex2 : ex1
     for x in 1:_ntotal(idx)
         (lv.present[x] && x != ex1 && x != ex2) || continue
-        d = _mdist(memo, idx, q, x)
+        d = _mdist(memo, idx, q, x, qid)
         push!(cands, x)
         if _better(d, x, nnd, nn)
             nn, nnd = x, d
@@ -96,7 +97,8 @@ end
 
 Nearest level-`l` element to `q` excluding `ex1`, `ex2`; with `record`, also every
 evaluated level-`l` element (a superset of the elements whose outlink a new element
-at `q` would improve). Distances of `cands` are in `idx.memo.val`.
+at `q` would improve). Distances of `cands` are in `idx.memo.val`. Writes nothing but
+`idx.memo`. `q` is the element `ex2` (or `ex1` when `ex2 == 0`), which names it in a NaN error.
 """
 function _nn_search(idx::HNNGIndex, q, l::Int, ex1::Int, ex2::Int,
                     floating::Vector{Int}, record::Bool)
@@ -104,15 +106,16 @@ function _nn_search(idx::HNNGIndex, q, l::Int, ex1::Int, ex2::Int,
     T = nlevels(idx) - 1
     nn, nnd = 0, Inf
     cands = Int[]
+    qid = ex2 != 0 ? ex2 : ex1
     for (ci, c) in enumerate(idx.levels[T+1].clusters)
-        c.rep == 0 || _push_cluster!(memo, idx, q, T, ci, nnd, l, record)
+        c.rep == 0 || _push_cluster!(memo, idx, q, T, ci, nnd, l, record, qid)
     end
     if l < T
         lv, up = idx.levels[l+1], idx.levels[l+2]
         for ci in floating
             c = lv.clusters[ci]
             (c.rep == 0 || any(m -> up.present[m], c.members)) && continue
-            _push_cluster!(memo, idx, q, l, ci, nnd, l, record)
+            _push_cluster!(memo, idx, q, l, ci, nnd, l, record, qid)
         end
     end
     while !isempty(memo.front)
@@ -124,7 +127,7 @@ function _nn_search(idx::HNNGIndex, q, l::Int, ex1::Int, ex2::Int,
             for m in c.members
                 memo.mark[m] = memo.epoch
                 (m == ex1 || m == ex2) && continue
-                d = _mdist(memo, idx, q, m)
+                d = _mdist(memo, idx, q, m, qid)
                 record && push!(cands, m)
                 if _better(d, m, nnd, nn)
                     nn, nnd = m, d
@@ -134,7 +137,7 @@ function _nn_search(idx::HNNGIndex, q, l::Int, ex1::Int, ex2::Int,
             below = idx.levels[L]
             for m in c.members
                 cj = below.cluster_of[m]
-                cj == 0 || _push_cluster!(memo, idx, q, L - 1, cj, nnd, l, record)
+                cj == 0 || _push_cluster!(memo, idx, q, L - 1, cj, nnd, l, record, qid)
             end
         end
     end
@@ -293,20 +296,23 @@ function _repair!(idx::HNNGIndex, l::Int, affected::Vector{Int}, extra::Vector{I
 end
 
 """
-    link!(idx, e, l, floating) -> (removed, added)
+    link!(idx, e, l, floating, found=nothing) -> (removed, added)
 
 Add `e` to the level-`l` population (spec §6.3): outlink to its exact nearest
 neighbour, rewire every element `x` with `(M(x, e), e) < (outdist(x), outlink(x))`,
 repair the touched clusters, refresh ancestors, return the representative delta.
+`found` is the result of `_nn_search(idx, e's point, l, e, 0, floating, true)` made
+just before (the memo must still hold its distances); `nothing` searches here.
 """
-function link!(idx::HNNGIndex, e::Int, l::Int, floating::Vector{Int})
+function link!(idx::HNNGIndex, e::Int, l::Int, floating::Vector{Int}, found=nothing)
     lv = idx.levels[l+1]
     lv.present[e] && error("HNNG internal error: $e is already present at level $l")
     lv.present[e] = true
     lv.npop += 1
     affected = Int[]
     if lv.npop >= 2
-        nn, nnd, cands = _nn_search(idx, _point(idx.store, e), l, e, 0, floating, true)
+        nn, nnd, cands = found === nothing ?
+            _nn_search(idx, _point(idx.store, e), l, e, 0, floating, true) : found
         nn == 0 && error("HNNG internal error: no neighbour found for $e at level $l")
         val = idx.memo.val
         lv.outlink[e] = nn
@@ -385,19 +391,68 @@ end
 
 _flush!(idx::HNNGIndex) = (idx.nevals += idx.memo.nevals; idx.memo.nevals = 0; idx)
 
+"""
+    _insert!(idx, v) -> id
+
+Insert one prepared element (spec §6.4). Exception safety: the level-0 nearest-neighbour
+search of the new element runs before any structural write (it writes only `idx.memo`).
+An exception up to the end of that search (a metric that throws or returns NaN on the
+new element, an `InterruptException`, …) rolls the index back to exactly its previous
+state (store length, `alive`, `nlive`, per-level arrays, a level 0 created for the first
+element, `last_update_stats`), so no id is assigned. An exception after it sets
+`idx.invalid` (see `_check_valid`). The exception is always rethrown.
+"""
 function _insert!(idx::HNNGIndex, v)
-    idx.last_rewired = 0
-    idx.last_top = 0
-    id = _append!(idx.store, v)
-    push!(idx.alive, true)
-    idx.nlive += 1
-    for lv in idx.levels
-        _grow!(lv, id)
+    n0, nlive0, nl0 = _ntotal(idx), idx.nlive, nlevels(idx)
+    rew0, top0 = idx.last_rewired, idx.last_top
+    phase = 0                     # 0: nothing structural written, 1: writing, 2: done
+    try
+        idx.last_rewired = 0
+        idx.last_top = 0
+        id = _append!(idx.store, v)
+        push!(idx.alive, true)
+        idx.nlive += 1
+        for lv in idx.levels
+            _grow!(lv, id)
+        end
+        isempty(idx.levels) && push!(idx.levels, Level(id))
+        floating = Int[]
+        found = idx.levels[1].npop == 0 ? nothing :
+            _nn_search(idx, _point(idx.store, id), 0, id, 0, floating, true)
+        phase = 1
+        propagate!(idx, link!(idx, id, 0, floating, found)..., 1)
+        phase = 2
+        _flush!(idx)
+        return id
+    catch
+        if phase == 0
+            _rollback_insert!(idx, n0, nlive0, nl0, rew0, top0)
+        elseif phase == 1
+            idx.invalid = true
+        end
+        rethrow()
     end
-    isempty(idx.levels) && push!(idx.levels, Level(id))
-    propagate!(idx, link!(idx, id, 0, Int[])..., 1)
-    _flush!(idx)
-    id
+end
+
+_truncate!(s::VectorStore, n::Int) = (s.n = n; s)
+_truncate!(s::ObjectStore, n::Int) = (resize!(s.objs, n); s)
+
+"""Undo the bookkeeping of an `_insert!` that wrote nothing structural."""
+function _rollback_insert!(idx::HNNGIndex, n0::Int, nlive0::Int, nl0::Int, rew0::Int, top0::Int)
+    disable_sigint() do
+        _truncate!(idx.store, n0)
+        resize!(idx.alive, n0)
+        idx.nlive = nlive0
+        resize!(idx.levels, nl0)             # drops the level 0 created for a first element
+        for lv in idx.levels
+            for v in (lv.outlink, lv.outdist, lv.inlinks, lv.present, lv.cluster_of)
+                length(v) > n0 && resize!(v, n0)
+            end
+        end
+        idx.last_rewired, idx.last_top = rew0, top0
+        _flush!(idx)
+    end
+    nothing
 end
 
 """
@@ -408,6 +463,15 @@ end
 
 Insert and return the new id(s). Vector input of any `Real` type is converted to the
 store's element type; a matrix is validated in full before anything is inserted.
+
+If the metric throws (or returns NaN, an `ArgumentError` naming the ids, the new
+element's being the id it would have received), or the call is interrupted, the
+exception is rethrown. When it happens before anything structural was written (the
+usual case: the metric fails on the new element during its nearest-neighbour search),
+the index is exactly as before and assigns no id. Otherwise the index is marked
+invalid, and every later call that searches, mutates, navigates, verifies or saves
+throws `ArgumentError`; rebuild it or load a saved copy. A matrix or vector of objects
+is inserted one element at a time: the elements before the failing one stay inserted.
 """
 add!(idx::HNNGIndex{<:VectorStore}, x::AbstractVector{<:Real}) =
     _locked(() -> _insert!(idx, _prepare(idx, x)), idx)
@@ -464,9 +528,9 @@ never prunes.
     idx.is_metric && lb > nnd && (!record || lb > c.maxout[l+1])
 
 @inline function _push_cluster!(memo::DistMemo, idx::HNNGIndex, q, L::Int, ci::Int,
-                                nnd::Float64, l::Int, record::Bool)
+                                nnd::Float64, l::Int, record::Bool, qid::Int=0)
     c = idx.levels[L+1].clusters[ci]
-    dr = _mdist(memo, idx, q, c.rep)
+    dr = _mdist(memo, idx, q, c.rep, qid)
     lb = idx.is_metric ? _lb(dr, c.radius, idx.guard) : 0.0
     _skip(idx, lb, nnd, c, l, record) || heappush!(memo.front, (lb, L, ci), FWD)
     nothing

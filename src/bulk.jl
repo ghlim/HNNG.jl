@@ -9,7 +9,7 @@ function _allpairs_nn_direct(idx::HNNGIndex, pop::Vector{Int})
         p = _point(idx.store, pop[i])
         for j in 1:m
             j == i && continue
-            d = _rawdist(idx, p, _point(idx.store, pop[j]))
+            d = _checked(idx, _rawdist(idx, p, _point(idx.store, pop[j])), pop[i], pop[j])
             if _better(d, pop[j], nnd[i], nn[i])
                 nn[i], nnd[i] = pop[j], d
             end
@@ -54,6 +54,28 @@ function _bulk_add!(idx::HNNGIndex{<:VectorStore}, X::AbstractMatrix{<:Real})
     _check_dim(idx, X)
     cols = [_prepare(idx, view(X, :, j)) for j in axes(X, 2)]
     isempty(cols) && return 1:0
+    try
+        _bulk_build!(idx, cols)
+    catch
+        _reset_empty!(idx)                   # the index was empty: nothing else to restore
+        rethrow()
+    end
+end
+
+"""Return an index that never held an element to that state (after a failed `bulk_add!`)."""
+function _reset_empty!(idx::HNNGIndex{VectorStore{T}}) where {T}
+    disable_sigint() do
+        idx.store.data = Matrix{T}(undef, dim(idx.store), 0)
+        idx.store.n = 0
+        empty!(idx.alive)
+        idx.nlive = 0
+        empty!(idx.levels)
+        _flush!(idx)
+    end
+    idx
+end
+
+function _bulk_build!(idx::HNNGIndex{<:VectorStore}, cols)
     for v in cols
         _append!(idx.store, v)
         push!(idx.alive, true)

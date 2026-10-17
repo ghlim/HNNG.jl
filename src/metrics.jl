@@ -38,19 +38,37 @@ _is_metric_for(::Union{VectorStore,ObjectStore}, m::UserMetric) = m.is_metric
 @inline _to_user(::HNNGIndex{<:VectorStore,<:CosineDist}, d::Float64) = d * d / 2
 @inline _to_user(::HNNGIndex, d::Float64) = d
 
+"""
+    _checked(idx, d, a, b) -> d
+
+`d` unless it is NaN, which would corrupt the `(distance, id)` order: then an
+`ArgumentError` names ids `a` and `b` (`a == 0`: the query). A no-op for the
+Euclidean-family kernel, which cannot produce NaN from finite coordinates.
+"""
+@inline _checked(::HNNGIndex{<:VectorStore,<:EuclidFamily}, d::Float64, a::Int, b::Int) = d
+@inline _checked(::HNNGIndex, d::Float64, a::Int, b::Int) = isnan(d) ? _nan_error(a, b) : d
+
+@noinline _nan_error(a::Int, b::Int) = throw(ArgumentError(
+    "the distance between " * (a == 0 ? "the query and id $b" : "ids $a and $b") *
+    " is NaN; the metric must return a number for every pair"))
+
 """Counted distance between two stored ids (internal units)."""
 @inline function _d(idx::HNNGIndex, a::Int, b::Int)
     idx.nevals += 1
-    _rawdist(idx, _point(idx.store, a), _point(idx.store, b))
+    _checked(idx, _rawdist(idx, _point(idx.store, a), _point(idx.store, b)), a, b)
 end
 
-"""Memoised distance from the pass query `q` to stored id `j`, counted in `memo.nevals`."""
-@inline function _mdist(memo::DistMemo, idx::HNNGIndex, q, j::Int)
+"""
+Memoised distance from the pass query `q` to stored id `j`, counted in `memo.nevals`.
+`qid` names `q` in a NaN error: `0` for a user query, else the stored id `q` belongs to.
+"""
+@inline function _mdist(memo::DistMemo, idx::HNNGIndex, q, j::Int, qid::Int=0)
     @inbounds if memo.seen[j] == memo.epoch
         return memo.val[j]
     end
     d = _rawdist(idx, q, _point(idx.store, j))
     memo.nevals += 1
+    _checked(idx, d, qid, j)
     @inbounds memo.seen[j] = memo.epoch
     @inbounds memo.val[j] = d
     d

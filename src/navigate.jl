@@ -1,6 +1,7 @@
 # Navigation along stored links (spec §7). No call here evaluates a distance.
 
 function _check_live(idx::HNNGIndex, id::Integer)
+    _check_valid(idx)
     n = _ntotal(idx)
     1 <= id <= n || throw(ArgumentError("unknown id $id: the index holds ids 1:$n"))
     idx.alive[id] || throw(ArgumentError("id $id is deleted"))
@@ -26,6 +27,7 @@ struct ClusterRef
 end
 
 function _check_level(idx::HNNGIndex, level::Integer)
+    _check_valid(idx)
     0 <= level < nlevels(idx) ||
         throw(ArgumentError("level $level is out of range 0:$(nlevels(idx) - 1)"))
     Int(level)
@@ -95,6 +97,7 @@ end
 
 """Handle of the single top-level cluster; `nothing` for an empty index."""
 function root(idx::HNNGIndex)
+    _check_valid(idx)
     isempty(idx.levels) && return nothing
     ClusterRef(nlevels(idx) - 1, findfirst(c -> c.rep != 0, idx.levels[end].clusters))
 end

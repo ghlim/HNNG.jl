@@ -142,6 +142,13 @@ results are always in the metric's own units. `guard` is the relative prune guar
 γ: `nothing` gives `max(1e-6, 4·d·eps(T))` for a VectorStore and `1e-6` for an
 ObjectStore.
 
+Exceptions: when the metric throws or returns NaN (an `ArgumentError`) or a call is
+interrupted during `add!`, `delete!` or `bulk_add!`, the exception is rethrown. An
+update that fails before writing anything structural leaves the index exactly as it
+was (`bulk_add!` leaves it empty); a later failure marks the index invalid, and every
+call that searches, mutates, navigates, verifies or saves then throws `ArgumentError`
+(`length`, `nlevels`, `is_metric` and `stats` still answer). See `add!` and `delete!`.
+
 Concurrency: each index has a `ReentrantLock`. `add!`, `delete!`, `bulk_add!`, `knn`,
 `HNNG.knn_counted`, `HNNG.knn_levelsync`, `knn_batch`, `verify`, `HNNG.save`, `stats`
 and `reset_evals!` hold it for their whole duration, so calls on one index from several
@@ -162,6 +169,7 @@ mutable struct HNNGIndex{S<:Union{VectorStore,ObjectStore},M}
     memo::DistMemo
     last_rewired::Int           # see HNNG.last_update_stats (Task 18)
     last_top::Int
+    invalid::Bool               # set by an exception after a structural write (see _check_valid)
     lock::ReentrantLock         # held by every public call that searches, mutates, verifies or saves
 end
 
@@ -177,7 +185,7 @@ function HNNGIndex(metric, dim::Integer; T::Type{<:AbstractFloat}=Float32,
     s = VectorStore{T}(Int(dim))
     g = guard === nothing ? _default_guard(T, Int(dim)) : Float64(guard)
     HNNGIndex(s, m, _is_metric_for(s, m), g, falses(0), 0, Level[], 0, DistMemo(), 0, 0,
-              ReentrantLock())
+              false, ReentrantLock())
 end
 
 function HNNGIndex(metric, ::Type{E}; guard::Union{Nothing,Real}=nothing) where {E}
@@ -185,20 +193,26 @@ function HNNGIndex(metric, ::Type{E}; guard::Union{Nothing,Real}=nothing) where 
     s = ObjectStore{E}()
     g = guard === nothing ? GUARD : Float64(guard)
     HNNGIndex(s, m, _is_metric_for(s, m), g, falses(0), 0, Level[], 0, DistMemo(), 0, 0,
-              ReentrantLock())
+              false, ReentrantLock())
 end
+
+const INVALID_MSG = "index is invalid after an exception in add!/delete!/bulk_add!; rebuild it or load a saved copy"
+
+"""Throw `ArgumentError` if an exception interrupted an update after a structural write."""
+@inline _check_valid(idx::HNNGIndex) = idx.invalid ? throw(ArgumentError(INVALID_MSG)) : nothing
 
 """
     _locked(f, idx)
 
-Run `f()` holding `idx.lock`. Every public call that touches the shared query buffers
-`idx.memo` and the counter `idx.nevals`, or mutates, verifies or saves the index, runs
-inside: calls on one index are serialized (correct, not parallel). The lock is
-reentrant, so a locked call may call another public function.
+Run `f()` holding `idx.lock`, after `_check_valid`. Every public call that touches the
+shared query buffers `idx.memo` and the counter `idx.nevals`, or mutates, verifies or
+saves the index, runs inside: calls on one index are serialized (correct, not
+parallel). The lock is reentrant, so a locked call may call another public function.
 """
 @inline function _locked(f::F, idx::HNNGIndex) where {F}
     lock(idx.lock)
     try
+        _check_valid(idx)
         f()
     finally
         unlock(idx.lock)

@@ -40,7 +40,7 @@ function load(path::AbstractString; metric=nothing)
     m === nothing && throw(ArgumentError(
         "the index in $path has an ObjectStore or a UserMetric; pass metric= to load it"))
     HNNGIndex(p.store, m, _is_metric_for(p.store, m), p.guard, p.alive, count(p.alive), p.levels,
-              0, DistMemo(), 0, 0, ReentrantLock())
+              0, DistMemo(), 0, 0, false, ReentrantLock())
 end
 
 """
@@ -52,7 +52,7 @@ evaluations made by `add!`, `delete!`, `bulk_add!` and the serial query path (`k
 `HNNG.knn_counted`, `knn_batch` with `threads=false`) since the last `reset_evals!`.
 `knn_batch(...; threads=true)` and `HNNG.knn_levelsync` are not counted.
 """
-stats(idx::HNNGIndex) = _locked(() -> _stats(idx), idx)
+stats(idx::HNNGIndex) = lock(() -> _stats(idx), idx.lock)
 
 function _stats(idx::HNNGIndex)
     pop = [lv.npop for lv in idx.levels]
@@ -63,7 +63,7 @@ function _stats(idx::HNNGIndex)
 end
 
 """Reset the distance-evaluation counter to 0."""
-reset_evals!(idx::HNNGIndex) = _locked(() -> (idx.nevals = 0; idx), idx)
+reset_evals!(idx::HNNGIndex) = lock(() -> (idx.nevals = 0; idx), idx.lock)
 
 """
     HNNG.last_update_stats(idx) -> (rewired, top_level_touched)

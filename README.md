@@ -43,6 +43,15 @@ index with BLAS. `HNNG.save(path, idx)` and `HNNG.load(path)` persist an index.
 `HNNG.load` reads Serialization files: load only files you trust, and files are not
 guaranteed to load across Julia versions.
 
+A metric that returns NaN raises an `ArgumentError` naming the pair. When the metric
+throws (or returns NaN) or the call is interrupted during `add!` or `delete!`, the
+exception propagates; if that happens during the first nearest-neighbour search (the
+usual case: the metric fails on the new element) the index is left exactly as it was
+and no id is used. A failure after that point marks the index invalid: further calls
+throw `ArgumentError`, and the index must be rebuilt or loaded from a saved copy.
+`add!(idx, X)` inserts column by column, so the columns before the failing one stay.
+A failed `bulk_add!` leaves the index empty.
+
 `knn_batch(idx, Q, k)` answers the columns of `Q` at once. With `threads=true` it
 spreads them over `Threads.nthreads()` tasks, which needs a thread-safe `UserMetric`,
 and it does not update the distance-evaluation counter. Each index has a lock that
