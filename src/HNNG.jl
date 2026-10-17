@@ -2,6 +2,7 @@ module HNNG
 
 using Distances: Distances, PreMetric, Metric, Euclidean, SqEuclidean, CosineDist
 using DataStructures: heappush!, heappop!
+using Serialization: serialize, deserialize
 
 export HNNGIndex, UserMetric, Euclidean, SqEuclidean, CosineDist
 export is_metric, nlevels, element, verify, add!, knn, knn_batch
@@ -16,5 +17,6 @@ include("delete.jl")
 include("search.jl")
 include("navigate.jl")
 include("verify.jl")
+include("io.jl")
 
 end # module

@@ -9,4 +9,5 @@ using Test, HNNG
     include("objects.jl")
     include("order.jl")
     include("navigate.jl")
+    include("io.jl")
 end
