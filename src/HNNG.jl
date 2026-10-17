@@ -4,13 +4,14 @@ using Distances: Distances, PreMetric, Metric, Euclidean, SqEuclidean, CosineDis
 using DataStructures: heappush!, heappop!
 
 export HNNGIndex, UserMetric, Euclidean, SqEuclidean, CosineDist
-export is_metric, nlevels, element, verify, add!
+export is_metric, nlevels, element, verify, add!, knn
 
 include("types.jl")
 include("kernels.jl")
 include("metrics.jl")
 include("insert.jl")
 include("delete.jl")
+include("search.jl")
 include("navigate.jl")
 include("verify.jl")
 

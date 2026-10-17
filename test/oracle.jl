@@ -72,3 +72,10 @@ end
 
 """Representative of the root cluster."""
 top_rep(idx) = first(c.rep for c in idx.levels[end].clusters if c.rep != 0)
+
+"""knn equals the brute-force oracle: same ids and the same distances (same kernel, same bits)."""
+function check_knn(idx, q, k)
+    ids, ds = knn(idx, q, k)
+    bids, bds = brute_knn(idx, q, k)
+    ids == bids && ds == bds
+end

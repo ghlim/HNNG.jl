@@ -4,4 +4,5 @@ using Test, HNNG
     include("oracle.jl")
     include("metrics.jl")
     include("invariants.jl")
+    include("search.jl")
 end
