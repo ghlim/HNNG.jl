@@ -128,8 +128,8 @@ function _verify_level(idx::HNNGIndex, l::Int)
         (issorted(c.members) && allunique(c.members)) || _fail("level $l: members of cluster $ci are not sorted and unique")
         for m in c.members
             lv.present[m] || _fail("level $l: cluster $ci holds absent element $m")
-            lv.cluster_of[m] == ci || _fail("level $l: cluster_of[$m] is $(lv.cluster_of[m]), expected $ci")
             seen[m] && _fail("level $l: element $m is in two clusters")
+            lv.cluster_of[m] == ci || _fail("level $l: cluster_of[$m] is $(lv.cluster_of[m]), expected $ci")
             seen[m] = true
         end
         _component(lv, c.rep) == c.members ||
@@ -155,7 +155,11 @@ function _verify_level(idx::HNNGIndex, l::Int)
         seen[x] || _fail("level $l: present element $x is in no cluster")
     end
     live == lv.nclusters || _fail("level $l: nclusters is $(lv.nclusters) but $live clusters are live")
+    freeseen = Set{Int}()
     for ci in lv.free
+        1 <= ci <= length(lv.clusters) || _fail("level $l: free slot $ci is out of range")
+        ci in freeseen && _fail("level $l: free slot $ci is listed twice")
+        push!(freeseen, ci)
         lv.clusters[ci].rep == 0 || _fail("level $l: free slot $ci holds a live cluster")
     end
     true
