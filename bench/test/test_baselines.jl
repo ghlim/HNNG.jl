@@ -70,3 +70,40 @@ include(joinpath(@__DIR__, "setup.jl"))
         end
     end
 end
+
+# The compile guard in build_time. These run in a child julia: in the test process the
+# build paths are already compiled by the tests above, so "no warning" would be vacuous.
+@testset "build_time compile guard (fresh process)" begin
+    core = joinpath(BENCH_DIR, "src", "BenchCore.jl")
+    function run_child(body::String)
+        script = "include(raw\"$core\"); using .BenchCore; $body"
+        cmd = `$(Base.julia_cmd()) -t 1 --project=$(BENCH_DIR) -e $script`
+        err = IOBuffer()
+        proc = run(pipeline(ignorestatus(cmd); stdout = devnull, stderr = err))
+        return success(proc), String(take!(err))
+    end
+    # smoke-size build in a fresh process: the first call to build_time for each method
+    ok, msg = run_child("""
+        X, _ = synthetic("gaussian", 300, 20, 20)
+        ms = BenchMethod[HNNGIncremental()]
+        HAS_SS && push!(ms, SSSearchGraph())
+        for m in ms
+            build_time(m, X)
+        end
+        """)
+    @test ok
+    @test !occursin("compilation inside timed build", msg)
+    # control: a method whose timed build (second call) compiles new code does trigger the warning
+    ok, msg = run_child("""
+        struct Compiles <: BenchMethod; calls::Ref{Int}; end
+        BenchCore.method_name(::Compiles) = "compiles"
+        function BenchCore.build(m::Compiles, X::Matrix{Float32})
+            m.calls[] += 1
+            m.calls[] == 2 && include_string(Main, "using LinearAlgebra; ctl_h(n) = sum(abs2, svd(randn(n, n)).S) + sum(sort(rand(Int8, n)) .+ 1); ctl_h(20)")
+            return nothing
+        end
+        build_time(Compiles(Ref(0)), zeros(Float32, 2, 10))
+        """)
+    @test ok
+    @test occursin("compilation inside timed build", msg)
+end

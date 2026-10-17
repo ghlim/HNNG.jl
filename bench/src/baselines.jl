@@ -38,15 +38,35 @@ end
 """
     build_time(m, X) -> (handle, seconds)
 
-Untimed warm-up build on the first min(n, 200) columns (compiles the build path), a full
-GC, then one timed full build (spec assumption A11).
+Untimed warm-up build on the first min(n, 2000) columns (compiles the build path; 200
+columns left code paths of SimilaritySearch uncompiled), a full GC, then one timed full
+build (spec assumption A11).
+
+Compile guard: Julia's cumulative compile-time counter is read around the timed build only.
+If more than max(0.05 s, 1% of the build time) went into compilation, a
+"compilation inside timed build" warning is logged with the method, n, compile and build
+seconds, so a polluted `build_s` is visible rather than silent.
 """
 function build_time(m::BenchMethod, X::Matrix{Float32})
-    build(m, X[:, 1:min(size(X, 2), 200)])
+    build(m, X[:, 1:min(size(X, 2), 2000)])
     GC.gc()
-    t0 = time_ns()
-    h = build(m, X)
-    return h, (time_ns() - t0) / 1e9
+    c0 = 0
+    local h, seconds, c1
+    Base.cumulative_compile_timing(true)
+    try
+        c0 = Base.cumulative_compile_time_ns()[1]
+        t0 = time_ns()
+        h = build(m, X)
+        seconds = (time_ns() - t0) / 1e9
+        c1 = Base.cumulative_compile_time_ns()[1]
+    finally
+        Base.cumulative_compile_timing(false)
+    end
+    compile_s = (c1 - c0) / 1e9
+    if compile_s > max(0.05, 0.01 * seconds)
+        @warn "compilation inside timed build" method = method_name(m) n = size(X, 2) compile_s = compile_s build_s = seconds
+    end
+    return h, seconds
 end
 
 # ---- hNNG ---------------------------------------------------------------------------
