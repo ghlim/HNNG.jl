@@ -21,10 +21,11 @@ function is_canonical(ids::AbstractVector, dists::AbstractVector)
 end
 
 """
-Order by (distance, id) and convert to (Vector{Int}, Vector{Float64}). NearestNeighbors.jl,
-HNSW.jl and SimilaritySearch already return sorted results, so the sort (which allocates)
-runs only when `is_canonical` fails, e.g. on ties; the timed query path of the baselines is
-then not charged for it.
+Order by (distance, id) and convert to (Vector{Int}, Vector{Float64}). The trees are called
+with `sortres = true` (the library's own in-place sort by distance), so `canonical` only fixes
+the id order within equal distances and widens the distances; the sort here (which allocates)
+runs only when `is_canonical` fails, e.g. on ties, so the common timed query path is not
+charged for it.
 """
 function canonical(ids::AbstractVector, dists::AbstractVector)
     if !is_canonical(ids, dists)
@@ -77,6 +78,10 @@ fraction_evaluated(h::HNNGHandle, qs, k::Int) =
 # ---- brute force: Gram trick with gemv, exact Float64 re-rank -----------------------
 struct BruteBLAS <: BenchMethod end
 method_name(::BruteBLAS) = "brute-BLAS"
+"""
+Brute-force handle. It reuses the mutable buffers `s`, `a` and `buf` on every query, so it is
+not thread-safe; the timing protocol runs one query at a time.
+"""
 struct BruteHandle
     X::Matrix{Float32}
     n2::Vector{Float32}     # ‖x_i‖²
@@ -121,6 +126,11 @@ Base.@kwdef struct BallTreeNN <: BenchMethod
 end
 method_name(::KDTreeNN) = "KD-tree"
 method_name(::BallTreeNN) = "ball-tree"
+"""
+Handle over a NearestNeighbors.jl tree. Tree distances are computed in the data's element type
+(Float32) and widened to Float64 by `canonical`; the recall rules recompute distances in
+Float64 from the returned ids, so this does not affect the reported recall.
+"""
 struct TreeHandle{T}
     tree::T
     n::Int
@@ -130,7 +140,7 @@ build(m::KDTreeNN, X::Matrix{Float32}) =
 build(m::BallTreeNN, X::Matrix{Float32}) =
     TreeHandle(NN.BallTree(X, Euclidean(); leafsize = m.leafsize), size(X, 2))
 function query(h::TreeHandle, q::AbstractVector{Float32}, k::Int)
-    ids, ds = NN.knn(h.tree, q, min(k, h.n))
+    ids, ds = NN.knn(h.tree, q, min(k, h.n), true)
     return canonical(ids, ds)
 end
 

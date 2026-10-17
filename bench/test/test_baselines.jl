@@ -30,6 +30,17 @@ include(joinpath(@__DIR__, "setup.jl"))
         @test canonical(Int[], Float64[]) == (Int[], Float64[])
     end
 
+    @testset "tree results arrive sorted: canonical has nothing to sort" begin
+        X, Q = synthetic("gaussian", 300, 20, 8)
+        for m in (KDTreeNN(), BallTreeNN())
+            h = build(m, X)
+            for q in columns(Q)
+                _, ds = BenchCore.NN.knn(h.tree, q, 10, true)
+                @test issorted(ds)
+            end
+        end
+    end
+
     @testset "hNNG fraction evaluated" begin
         X, Q = synthetic("blobs", 300, 20, 2)
         h = build(HNNGBulk(), X)
