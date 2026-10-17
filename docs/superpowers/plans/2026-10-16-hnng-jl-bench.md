@@ -6,9 +6,9 @@
 
 **Architecture:** A bench-local module `BenchCore` (`bench/src/`) holds four single-purpose files: dataset loading and generation, the two recall rules, the timing protocol with `env.txt`, and one method interface (`build` / `query` / `build_time`) over hNNG, BLAS brute force, NearestNeighbors.jl trees, HNSW.jl and optional SimilaritySearch.jl. Thin scripts `exp1.jl`, `exp2.jl`, `exp3.jl` write fixed-schema CSVs. `tables.jl` and `plots.jl` turn those CSVs into `.tex` and `.pdf` files. `run_all.jl` runs everything and `run.sh` pins it to one core. `BENCH_SMOKE=1` shrinks every experiment to tiny sizes, so every task's tests exercise the real code path in seconds.
 
-**Tech Stack:** Julia stable (installed by the index plan through juliaup; `[compat] julia = "1.10"`), HNNG (dev path), Distances, NearestNeighbors 0.4.29, HNSW 0.1.6, HDF5 0.17.4, StableRNGs, CSV, DataFrames, CairoMakie, BenchmarkTools 1.8.0, SHA, SimilaritySearch 1.6.5 (optional), stdlibs LinearAlgebra, Statistics, Printf, Dates, Random, Test.
+**Tech Stack:** Julia stable (installed by the index plan through juliaup; `[compat] julia = "1.10"`), HNNG (dev path), Distances, NearestNeighbors, HNSW, HDF5, StableRNGs, CSV, DataFrames, CairoMakie, SHA, SimilaritySearch (optional), stdlibs Pkg, LinearAlgebra, Statistics, Printf, Dates, Random, Test. Package versions are not pinned here: `bench/Manifest.toml` (committed) and the `pkg_versions` and `manifest_sha256` lines of `env.txt` are the record.
 
-**Spec:** `/home/coral/working/HNNG.jl/docs/superpowers/specs/2026-10-15-hnng-jl-port-design.md` (sections 4, 4.2, 4.3, 8 and 11 drive this plan). Package API notes: `/home/coral/working/.workflow/scratch/julia-eco/{HNSW,NearestNeighbors,SimilaritySearch,HDF5,BenchmarkTools}.md`. TKDE layouts to reproduce: `/home/coral/working/publications/Hierarchical-Nearest-Neighbor-Graph/tkde2026_draft_sections.tex` lines 88–97 (ρ(d) sentence), 172–186 (`tab:annbench`), 217–234 (`tab:fashion`), 448–463 (`tab:ops`).
+**Spec:** `/home/coral/working/HNNG.jl/docs/superpowers/specs/2026-10-15-hnng-jl-port-design.md` (sections 4, 4.2, 4.3, 8 and 11 drive this plan). Package API notes: `/home/coral/working/.workflow/scratch/julia-eco/{HNSW,NearestNeighbors,SimilaritySearch,HDF5}.md`. TKDE layouts to reproduce: `/home/coral/working/publications/Hierarchical-Nearest-Neighbor-Graph/tkde2026_draft_sections.tex` lines 88–97 (ρ(d) sentence), 172–186 (`tab:annbench`), 217–234 (`tab:fashion`), 448–463 (`tab:ops`).
 
 **Prerequisite:** the sibling plan `docs/superpowers/plans/2026-10-16-hnng-jl-index.md` is executed first: Julia is installed, `import HNNG` works from the repository root, the package tests are green, and the repo-local git identity is set. Every task below loads `HNNG`.
 
@@ -31,23 +31,23 @@
 
 ## Spec assumptions
 
-Gaps or choices the spec leaves open. The spec is not changed; these are decided here.
+Gaps or choices the spec leaves open; these are decided here. (The review pass also corrected the spec itself where noted in A2, A11 and A15.)
 
 - **A1.** `HNNG.last_update_stats` (table above) is needed by Exp.3 and is not in spec §4.
-- **A2.** (Confirmed by the coordinator.) Spec §10 lists `test/recall_rule.jl` in the package tests for "the harness's two recall definitions". This plan tests the rules in `bench/test/runtests.jl` (they live in `bench/src/recall.jl`, inside the bench environment). The index plan should either drop `test/recall_rule.jl` or include `bench/src/recall.jl` from it.
-- **A3.** `bench/Project.toml` also lists `Distances` (for `Euclidean()`), `SHA` (Manifest hash) and the stdlibs it uses; spec §11 names only the main packages.
+- **A2.** (Confirmed by the coordinator.) Spec §3 and §10 say the harness's two recall definitions are tested in `bench/test/runtests.jl` (the rules live in `bench/src/recall.jl`, inside the bench environment); the package's `test/` has no `recall_rule.jl`. This plan writes that test (Task 2).
+- **A3.** `bench/Project.toml` also lists `Distances` (for `Euclidean()`), `SHA` (Manifest hash), `Pkg` (package versions in `env.txt`) and the stdlibs it uses; spec §11 names only the main packages. `BenchmarkTools` is not a dependency (A15).
 - **A4.** The method supertype is `BenchMethod`, not `Method` (`Method` is a `Base` type).
-- **A5.** SimilaritySearch is loaded with `try import SimilaritySearch catch end` (`import`, not `using`, so its exports cannot clash with `build`/`query`). Spec §11 names both `ExhaustiveSearch` and `SearchGraph`, so both get rows (`SS-Exhaustive`, `SS-SearchGraph`) with default parameters. The calls (`MatrixDatabase`, `SearchGraph(; dist, db)`, `SearchGraphContext()`, `index!`, `ExhaustiveSearch(; dist, db)`, `GenericContext()`, `searchbatch -> (ids, dists)`) come from the 1.1 changelog and README in the notes and are not otherwise verified; experiment rows are skipped with a warning if any call throws.
+- **A5.** SimilaritySearch is loaded with `try import SimilaritySearch catch end` (`import`, not `using`, so its exports cannot clash with `build`/`query`). Spec §11 names both `ExhaustiveSearch` and `SearchGraph`, so both get rows (`SS-Exhaustive`, `SS-SearchGraph`) with default parameters. The calls follow the SimilaritySearch.jl searchgraph tutorial (v1.6.5): positional constructors `SearchGraph(dist, db)` and `ExhaustiveSearch(dist, db)` with `SimilaritySearch.Dist.L2()` (metric Euclidean, so the reported distances are comparable to the other methods'), `MatrixDatabase`, `SearchGraphContext(; neighborhood = Neighborhood(; neardup = 0f0))`, `GenericContext()`, `index!`, and one query at a time through `knnqueue(ctx, k)`, `search(index, ctx, q, res)`, `expand!(G, ctx, q, res)` and `IdDistView(res)`. `expand!` returns the raw k nearest points when `neardup` folds exact duplicates into cluster members (Fashion-MNIST has repeated images; without the expansion a query returns one representative per duplicate group and under-counts recall). The Task 5 testset checks the result convention; experiment rows are skipped with a warning if any call throws.
 - **A6.** (Confirmed.) The generated `.tex` files hold only the `tabular` environment. The manuscript keeps its own `table` float, caption and label and `\input`s the file.
 - **A7.** The table "Recall" column uses the ann-benchmarks rule. "HNSW (max recall attained)" = the HNSW row with the highest recall (ties: higher QPS). "HNSW (sweet spot)" = the fastest HNSW row with recall ≥ 0.99, else the max-recall row. When no HNSW row exists, an `SS-SearchGraph` row takes the HNSW place (spec §13).
 - **A8.** (Confirmed.) `tab_ops` "rebuild" = one full streaming rebuild (`add!` of all n points), which is what the TKDE text calls the "sequential rebuild"; speedup = rebuild / insert latency (TKDE: 0.46 s / 1.10 ms ≈ 419). The bulk rebuild is recorded as `op = rebuild-bulk` and gets its own macro.
 - **A9.** "Median per-operation latency of three runs" = median over the three runs of each run's mean per-operation latency. The three runs repeat the same build, inserts and deletes (fixed seeds). `exp3.csv` keeps every operation, so other summaries stay possible.
 - **A10.** (Confirmed.) Exp.2 indexes hNNG with the bulk loader (by spec §6.1 the structure is the same as a streaming build); ρ is reported for hNNG only. Exactness of all four methods is asserted during the run.
-- **A11.** Build time is one timed build after an untimed warm-up build on the first 200 columns, not best of three (full-size streaming builds take minutes). Query QPS is the best of three passes, as the spec says.
+- **A11.** Build time is one timed build after an untimed warm-up build on the first 200 columns, not best of three (full-size streaming builds take minutes). Query QPS is the best of three passes. Spec §11 says exactly this (query timing best of three, build time one timed build), and the manuscript's Setup sentence is meant to say the same.
 - **A12.** Recall uses distances recomputed in Float64 from the returned ids, as ann-benchmarks recomputes from ids, not each library's own float output.
 - **A13.** Smoke runs subset the HDF5 data (first 300 train points, first 20 queries) and recompute ground truth by Float64 brute force. Full runs use the HDF5 `neighbors`/`distances` (+1 on ids).
 - **A14.** For Exp.3, HNSW.jl gets all `n + 200` points in its data vector, links `1:n` at build time, then links one point per insert (`add_to_graph!(g, [i])`). The HNSW delete row has a missing latency and the note `mark only`.
-- **A15.** BenchmarkTools is in `Project.toml` as the spec requires, but the timing code uses explicit `time_ns` loops: the protocol (best of three whole passes; mutating operations timed one by one) does not map onto BenchmarkTools' sampling.
+- **A15.** BenchmarkTools is not a dependency (spec §11 no longer lists it): the timing code uses explicit `time_ns` loops because the protocol (best of three whole passes; mutating operations timed one by one) does not map onto BenchmarkTools' sampling.
 - **A16.** Smoke output goes to `bench/results-smoke/` (gitignored). `bench/results/` is committed after the full run (Task 12).
 - **A17.** Exp.3 runs the TKDE grid `n ∈ {8000, 16000, 32000} × d ∈ {16, 64, 128}` (spec §11 as revised in commit 6e8690d). In `exp3.csv`, `config = "table"` marks the three `tab_ops` rows and `config = "grid"` the other six; the figure uses all nine.
 - **A18.** Brute-force candidates: every point whose Float32 score is within τ = max(1e-4, 2·d·eps(Float32))·(‖q‖² + max‖x‖²) of the k-th score, re-ranked in Float64 (spec: "exact re-rank of the top candidates").
@@ -55,14 +55,18 @@ Gaps or choices the spec leaves open. The spec is not changed; these are decided
 - **A20.** The TKDE tables mix precisions; this plan fixes one rule per column: recall `%.3f` (annbench) or `%.5f` (fashion); QPS integer with `{,}` separators when ≥ 100, else one decimal; build seconds three significant digits; ms with two decimals.
 - **A21.** Blobs assign point i to centre `((i-1) mod 100) + 1` (equal counts, as `make_blobs` does, in a different order).
 - **A22.** (Confirmed.) HNSW.jl is loaded like SimilaritySearch (`try import HNSW catch end`, flag `HAS_HNSW`), so that spec §13's fallback (SearchGraph takes HNSW's rows when HNSW.jl fails to load) works instead of the whole harness failing to load.
+- **A23.** `run_all` runs the experiments in the order exp2, exp3, exp1 (random-xs only), exp1b (Fashion-MNIST): the cheap or never-yet-run-at-full-size experiments come first and the multi-hour Fashion-MNIST run last, so a late failure costs the least. An experiment whose CSV already exists in the output directory is skipped unless `BENCH_FORCE=1`; smoke runs always rerun (their directory is scratch). `BENCH_ONLY=<exp1|exp1b|exp2|exp3>` restricts a run to one experiment (add `BENCH_FORCE=1` to rerun it when its CSV exists). Tables and plots are written only when all four CSVs exist.
+- **A24.** Figures are designed at their final print size and saved with `save(path, fig; pt_per_unit = 1)`, so `Figure(size = ...)` is in pt. The `sn-jnl` `iicol` layout has a 160 mm text width and 8 mm column separation, so a column is 76 mm = 215 pt and the double-column width is 453 pt. Single-column figures (`recall_qps`, `dist_eval_vs_dim`, `qps_vs_dim`) are 215 × 165 pt; `ops_comparison` is a double-column `figure*` of 450 × 150 pt; all use font size 8 pt.
+- **A25.** The ann-benchmarks recall rule (additive 1e-3) cannot see a miss at low d, where gaps between consecutive neighbour distances are of order 1e-3. For the exact methods (hNNG, brute force, KD-tree, ball tree) Exp.1, Exp.1b and Exp.2 therefore also check, per query, that the k returned distances (recomputed in Float64) equal the true k nearest distances within rtol 1e-5 (`min_match`, Task 2), and fail the run otherwise. Exp.3 does the same in `check_exact!`.
+- **A26.** The Exp.3 insert, delete and HNSW-insert loops call `GC.gc(false)` immediately before each timed region (outside it), so that garbage from the untimed exactness check is not collected inside a timed operation.
 
 ## Global Constraints
 
 - Julia: package compat lower bound `1.10`; `bench/Project.toml` has `[compat] julia = "1.10"`.
-- Protocol (spec §11, verbatim): "`julia -t 1`, `BLAS.set_num_threads(1)`, process pinned with `taskset`, one query at a time, the best of three timed passes, `k = 10`."
+- Protocol (spec §11, verbatim): "`julia -t 1`, `BLAS.set_num_threads(1)`, process pinned with `taskset`, one query at a time, `k = 10`. Query timing is the best of three timed passes; build time is a single timed build after an untimed warm-up build; the Exp.3 table reports the median over three runs of the mean per-operation latency."
 - Recall (verbatim): "the ann-benchmarks rule (a returned distance counts if it is `≤` the true k-th distance `+ 1e-3`) and strict id recall."
 - Fraction evaluated (verbatim): "distance evaluations during the query divided by the number of live elements", from `HNNG.knn_counted`.
-- `env.txt` records "Julia version, the `Manifest.toml` hash, CPU model, governor, and date".
+- `env.txt` records "Julia version, the `Manifest.toml` hash, CPU model, governor, and date", plus this plan's additions: allowed CPUs, thread counts, HNNG.jl commit, `dirty` (uncommitted changes outside `bench/results*`), `smoke`, the seeds, `pkg_versions` and the kernel.
 - Data: `random-xs-20-euclidean.hdf5` and `fashion-mnist-784-euclidean.hdf5` from `/home/coral/working/benchmarks/data/` (`train`, `test`, `neighbors`, `distances`).
 - HNSW.jl: `M = 16`, `efConstruction = 200`, `ef` sweep `{10, 20, 40, 80, 160, 320, 640}`.
 - Exp.2: `d ∈ {2, 4, 8, 16, 32, 64, 128}`, 1,000 queries; Gaussian `N(0, I_d)` with `n = 5,000`; 100-centre blobs with `n = 10,000`, centres uniform in `[-10, 10]^d`, unit isotropic standard deviation.
@@ -76,10 +80,11 @@ Gaps or choices the spec leaves open. The spec is not changed; these are decided
 ## Review Focus
 
 1. **Float32 cancellation in the BLAS brute force** when ‖x‖² is far larger than neighbour distances² (Fashion-MNIST pixel norms, offset data): a person expects the brute-force row to stay exact (recall 1.0). Pinned by the test "brute force stays exact under Float32 cancellation" in Task 4.
-2. **A run started with more than one thread** (plain `julia`, or `JULIA_NUM_THREADS` set): a person expects the harness to refuse before timing anything, not to publish inflated QPS. Pinned by the subprocess test "check_protocol refuses more than one thread" in Task 3.
+2. **A run started with more than one thread** (plain `julia`, or `JULIA_NUM_THREADS` set): a person expects the harness to refuse before timing anything, not to publish inflated QPS. Pinned by the subprocess test "check_protocol refuses more than one thread" in Task 3, which asserts the refusal message, so a child that merely failed to load `BenchCore` does not pass.
 3. **HNSW never reaching recall 0.99 on a dataset, or HNSW.jl absent:** a person expects the tables still to be written, with the sweet-spot row falling back to the max-recall row and SearchGraph taking HNSW's place. Pinned by two tests in Task 9.
 4. **A smoke run or a test overwriting the real results:** a person expects `bench/results/` to change only on a full run. Pinned by the `results_dir` tests in Task 1; every experiment test writes into `mktempdir()`.
-5. **An approximate method returning fewer than k ids, duplicate ids, or more than k:** a person expects the recall to count each true neighbour once and to ignore extras. Pinned by the recall tests in Task 2.
+5. **An approximate method returning fewer than k ids, duplicate ids, or more than k:** a person expects the recall to count each true neighbour once and to ignore extras. Pinned by the recall tests in Task 2, including a duplicated returned id through `mean_recalls`.
+6. **A crash hours into the full run:** a person expects the finished experiments to survive and a rerun to continue, not to repeat hours of work. Pinned by the `run_experiments` test in Task 11 (order, skip-existing, `BENCH_ONLY`, `BENCH_FORCE`, no tables and plots until all four CSVs exist).
 
 ## File structure
 
@@ -88,13 +93,13 @@ Gaps or choices the spec leaves open. The spec is not changed; these are decided
 | `bench/Project.toml`, `bench/Manifest.toml` | bench environment; HNNG as a dev dependency (`path = ".."`) |
 | `bench/src/BenchCore.jl` | module: imports, optional SimilaritySearch, `is_smoke`, `results_dir`, CSV schemas, `op_latency` |
 | `bench/src/datasets.jl` | seeds, HDF5 loader, smoke subset, Gaussian and blob generators, Float64 ground truth |
-| `bench/src/recall.jl` | `recall_ann`, `recall_id`, `mean_recalls` |
+| `bench/src/recall.jl` | `recall_ann`, `recall_id`, `mean_recalls`, `distance_match`, `min_match` |
 | `bench/src/timing.jl` | `check_protocol`, `best_of`, `time_queries`, `write_env` |
 | `bench/src/baselines.jl` | `BenchMethod` interface and every method adapter |
-| `bench/exp1.jl`, `bench/exp2.jl`, `bench/exp3.jl` | one experiment each; `run_expN(; smoke, outdir)` |
+| `bench/exp1.jl`, `bench/exp2.jl`, `bench/exp3.jl` | `run_exp1` and `run_exp1b` (exp1.jl, one dataset each), `run_exp2`, `run_exp3`; all `run_expN(; smoke, outdir)` |
 | `bench/tables.jl` | `tab_annbench.tex`, `tab_fashion.tex`, `tab_ops.tex`, `macros.tex` |
 | `bench/plots.jl` | the four PDFs |
-| `bench/run_all.jl`, `bench/run.sh` | the whole pipeline; pinned wrapper |
+| `bench/run_all.jl`, `bench/run.sh` | the whole pipeline (ordered, resumable); pinned wrapper |
 | `bench/test/setup.jl`, `bench/test/runtests.jl`, `bench/test/test_*.jl` | tests (always smoke-sized) |
 | `README.md` | "Benchmarks" section |
 
@@ -108,7 +113,7 @@ CSV schemas (fixed in Task 1, checked by every experiment test):
 
 Every script loads `BenchCore` with `using .BenchCore` next to `using DataFrames` and, in `plots.jl`, `using CairoMakie`, all in `Main`. BenchCore's exported names therefore must not repeat theirs: that is why the smoke subset is `smoke_subset` (DataFrames exports `subset`) and the random index is `draw_index` (Makie exports `pick`). The `run_all` test (Task 11) loads every script in one session and catches any new clash.
 
-All commands run from `/home/coral/working/HNNG.jl`.
+All commands run from `/home/coral/working/HNNG.jl`. Every shell command assumes `export PATH="$HOME/.juliaup/bin:$PATH"` (the index plan's Global Constraints rule): shells reset between calls, so repeat that export at the top of every command block you run. `bench/run.sh` exports it itself.
 
 ---
 
@@ -118,7 +123,7 @@ All commands run from `/home/coral/working/HNNG.jl`.
 - Create: `bench/Project.toml`, `bench/Manifest.toml` (written by Pkg)
 - Create: `bench/src/BenchCore.jl`, `bench/src/datasets.jl`
 - Create: `bench/test/setup.jl`, `bench/test/runtests.jl`, `bench/test/test_datasets.jl`
-- Modify: `.gitignore` (append one line; create the file if absent)
+- Modify: `.gitignore` (append two lines and make sure only the root manifest is ignored; create the file if absent)
 
 **Interfaces:**
 - Consumes: `HNNG` loads (index plan).
@@ -128,10 +133,10 @@ All commands run from `/home/coral/working/HNNG.jl`.
 
 ```bash
 mkdir -p bench/src bench/test
-julia --project=bench -e 'using Pkg; Pkg.develop(path="."); Pkg.add(["Distances", "NearestNeighbors", "HDF5", "BenchmarkTools", "StableRNGs", "CSV", "DataFrames", "CairoMakie", "SHA", "Statistics", "LinearAlgebra", "Printf", "Dates", "Random", "Test"]); Pkg.compat("julia", "1.10")'
+julia --project=bench -e 'using Pkg; Pkg.develop(path="."); Pkg.add(["Distances", "NearestNeighbors", "HDF5", "StableRNGs", "CSV", "DataFrames", "CairoMakie", "SHA", "Pkg", "Statistics", "LinearAlgebra", "Printf", "Dates", "Random", "Test"]); Pkg.compat("julia", "1.10")'
 julia --project=bench -e 'using Pkg; Pkg.add("HNSW")' || echo "HNSW not added; SearchGraph takes its rows (spec §13)"
 julia --project=bench -e 'using Pkg; Pkg.add("SimilaritySearch")' || echo "SimilaritySearch not added; SS rows will be skipped"
-julia --project=bench -e 'import HNNG, Distances, NearestNeighbors, HDF5, BenchmarkTools, StableRNGs, CSV, DataFrames, CairoMakie, SHA; println("bench env ok")'
+julia --project=bench -e 'import HNNG, Distances, NearestNeighbors, HDF5, StableRNGs, CSV, DataFrames, CairoMakie, SHA, Pkg; println("bench env ok")'
 ```
 
 Expected: the last command prints `bench env ok`. `bench/Project.toml` lists every package above under `[deps]`, and `bench/Manifest.toml` records HNNG with `path = ".."`. If the `HNSW` or `SimilaritySearch` add fails to resolve on this Julia version, leave that package out (the code handles its absence: spec §13 lets SearchGraph take HNSW's rows) and say so in the commit message.
@@ -144,6 +149,9 @@ Expected: the last command prints `bench env ok`. `bench/Project.toml` lists eve
 # Shared preamble: every bench test file starts with include("setup.jl").
 using Test
 ENV["BENCH_SMOKE"] = "1"   # tests never run the full-size experiments
+for k in ("BENCH_ONLY", "BENCH_FORCE", "BENCH_RESULTS")   # a stray export must not change what the tests do
+    delete!(ENV, k)
+end
 isdefined(Main, :BenchCore) || include(joinpath(@__DIR__, "..", "src", "BenchCore.jl"))
 using .BenchCore
 ```
@@ -253,6 +261,7 @@ using LinearAlgebra, Statistics, Printf, Dates, Random
 using HDF5, StableRNGs, CSV, DataFrames, SHA
 using Distances: Euclidean
 import HNNG
+import Pkg
 import NearestNeighbors as NN
 
 # HNSW.jl and SimilaritySearch are optional: their rows are skipped when they do not load
@@ -429,11 +438,16 @@ end
 draw_index(rng, m::Int) = min(m, 1 + floor(Int, rand(rng) * m))
 ```
 
-Append the smoke output directory and the run log to `.gitignore`:
+Append the smoke output directory and the run log to `.gitignore`, and make sure the manifest pattern ignores only the repository root's `Manifest.toml`. The index plan writes that pattern; with a bare `Manifest.toml` it would also ignore `bench/Manifest.toml`, which this plan commits as the pin for the paper numbers (`git add` would refuse it and a fresh machine would resolve new versions):
 
 ```bash
 printf '%s\n' 'bench/results-smoke/' 'bench/run.log' >> .gitignore
+sed -i 's|^Manifest\.toml$|/Manifest.toml|' .gitignore   # no-op when the line already has the leading slash
+grep -n 'Manifest' .gitignore
+git check-ignore -v bench/Manifest.toml || echo "bench/Manifest.toml is not ignored"
 ```
+
+Expected: the `grep` shows `/Manifest.toml` (with the leading slash) and the last command prints `bench/Manifest.toml is not ignored`.
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
@@ -445,7 +459,10 @@ Expected: `Test Summary:` for `datasets` with every test passing and no `Fail` o
 ```bash
 git add .gitignore bench/Project.toml bench/Manifest.toml bench/src/BenchCore.jl bench/src/datasets.jl bench/test/setup.jl bench/test/runtests.jl bench/test/test_datasets.jl
 git commit -m "bench: environment, BenchCore module, dataset loaders and generators" -m "Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+git ls-files bench/Manifest.toml | grep -q . && echo "bench/Manifest.toml is tracked"
 ```
+
+Expected: the last line prints `bench/Manifest.toml is tracked`. If it prints nothing, the manifest was not committed: fix `.gitignore` as in Step 4 and `git add -f bench/Manifest.toml` before moving on.
 
 ---
 
@@ -458,7 +475,7 @@ git commit -m "bench: environment, BenchCore module, dataset loaders and generat
 
 **Interfaces:**
 - Consumes: `dist64`, `ground_truth`, `Dataset` (Task 1).
-- Produces: `recall_ann(found_dists, true_dists, k; eps = 1e-3) -> Float64`, `recall_id(found_ids, true_ids, k) -> Float64`, `mean_recalls(X, Q, true_ids, true_dists, results, k) -> (recall_ann::Float64, recall_id::Float64)` with `results::Vector{<:Tuple{Vector{Int},Vector{Float64}}}` (one `(ids, dists)` per query column), and `mean_recalls(ds::Dataset, results, k)`.
+- Produces: `recall_ann(found_dists, true_dists, k; eps = 1e-3) -> Float64`, `recall_id(found_ids, true_ids, k) -> Float64`, `mean_recalls(X, Q, true_ids, true_dists, results, k) -> (recall_ann::Float64, recall_id::Float64)` with `results::Vector{<:Tuple{Vector{Int},Vector{Float64}}}` (one `(ids, dists)` per query column; only the first `k` distinct returned ids count), and `mean_recalls(ds::Dataset, results, k)`; `distance_match(found_dists, true_dists, k; rtol = 1e-5, atol = 1e-9) -> Float64` (fraction of the k ranks whose sorted found distance equals the true one; the exactness check of assumption A25); `min_match(X, Q, true_dists, results, k) -> Float64` (minimum of `distance_match` over the queries, distances recomputed in Float64 from the returned ids) and `min_match(ds::Dataset, results, k)`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -497,6 +514,26 @@ include(joinpath(@__DIR__, "setup.jl"))
         res = [([1, 2], [0.0, 0.0]), ([4, 2], [0.0, 0.0])]   # reported distances are ignored
         ra, ri = mean_recalls(X, Q, nb, gd, res, 2)
         @test ra == 0.75 && ri == 0.75
+        # a duplicated returned id is credited once by both rules, even with the right distance
+        resdup = [([1, 1], [0.0, 0.0]), ([4, 3], [0.0, 0.0])]
+        ra2, ri2 = mean_recalls(X, Q, nb, gd, resdup, 2)
+        @test ra2 == 0.75 && ri2 == 0.75                     # query 1: 0.5, query 2: 1.0
+    end
+
+    @testset "distance_match: the multiset check the additive rule cannot make" begin
+        tdist = [1.0, 2.0, 2.0, 3.0]
+        @test distance_match([1.0, 2.0], tdist, 2) == 1.0
+        @test distance_match([2.0, 1.0], tdist, 2) == 1.0            # order of the found distances does not matter
+        @test distance_match([1.0, 2.0009], tdist, 2) == 0.5         # recall_ann calls this 1.0
+        @test distance_match([1.0], tdist, 2) == 0.5                 # fewer than k results
+        @test distance_match([1.0, 1.0], tdist, 2) == 0.5            # a repeated distance is not a second neighbour
+        @test distance_match([1.0, 2.0, 9.0], tdist, 2) == 1.0       # results beyond k are ignored
+        @test_throws ArgumentError distance_match([1.0], tdist, 0)
+        X = Float32[0 1 2 3]
+        Q = reshape(Float32[0.4, 2.6], 1, 2)
+        nb, gd = ground_truth(X, Q, 2)
+        @test min_match(X, Q, gd, [([1, 2], [0.0, 0.0]), ([4, 3], [0.0, 0.0])], 2) == 1.0
+        @test min_match(X, Q, gd, [([1, 2], [0.0, 0.0]), ([4, 2], [0.0, 0.0])], 2) == 0.5
     end
 end
 ```
@@ -512,7 +549,7 @@ Expected: the recall testset errors with ``UndefVarError: `recall_ann` not defin
 
 ```julia
 # The two recall definitions reported by the harness (spec §11).
-export recall_ann, recall_id, mean_recalls
+export recall_ann, recall_id, mean_recalls, distance_match, min_match
 
 """
     recall_ann(found_dists, true_dists, k; eps = 1e-3)
@@ -537,9 +574,10 @@ end
 """
     mean_recalls(X, Q, true_ids, true_dists, results, k) -> (recall_ann, recall_id)
 
-`results[j] = (ids, dists)` answers query column j. Distances are recomputed in Float64
-from the returned ids (as ann-benchmarks recomputes them), so every method is judged
-with the same kernel.
+`results[j] = (ids, dists)` answers query column j. Only the first `k` returned ids are
+considered and a repeated id counts once, so an approximate method cannot be over-credited
+by returning the same neighbour twice. Distances are recomputed in Float64 from those ids
+(as ann-benchmarks recomputes them), so every method is judged with the same kernel.
 """
 function mean_recalls(X::AbstractMatrix, Q::AbstractMatrix, true_ids::AbstractMatrix{<:Integer},
                       true_dists::AbstractMatrix{<:Real}, results, k::Int)
@@ -547,15 +585,54 @@ function mean_recalls(X::AbstractMatrix, Q::AbstractMatrix, true_ids::AbstractMa
     ri = 0.0
     for (j, (ids, _)) in enumerate(results)
         q = view(Q, :, j)
-        rd = Float64[dist64(view(X, :, i), q) for i in ids]
+        first_k = unique(collect(Iterators.take(ids, k)))     # keep the first k, drop repeats
+        rd = Float64[dist64(view(X, :, i), q) for i in first_k]
         ra += recall_ann(rd, view(true_dists, :, j), k)
-        ri += recall_id(ids, view(true_ids, :, j), k)
+        ri += recall_id(first_k, view(true_ids, :, j), k)
     end
     return ra / length(results), ri / length(results)
 end
 
 mean_recalls(ds::Dataset, results, k::Int) =
     mean_recalls(ds.train, ds.test, ds.neighbors, ds.distances, results, k)
+
+"""
+    distance_match(found_dists, true_dists, k; rtol = 1e-5, atol = 1e-9) -> Float64
+
+Exactness check for exact methods: sort the first `k` found distances and compare them
+rank by rank with `true_dists[1:k]`. Returns the fraction of ranks that agree within
+`rtol`/`atol`; fewer than `k` found distances leave the missing ranks unmatched. Unlike
+`recall_ann`, whose additive `1e-3` slack accepts the (k+1)-th neighbour when consecutive
+neighbour distances differ by less than that (low d, small distance scales), this fails on
+any wrong neighbour. A tie may return either point: only the distances are compared.
+"""
+function distance_match(found_dists::AbstractVector{<:Real}, true_dists::AbstractVector{<:Real},
+                        k::Int; rtol::Real = 1e-5, atol::Real = 1e-9)
+    k >= 1 || throw(ArgumentError("k must be ≥ 1, got $k"))
+    f = sort!(Float64[x for x in Iterators.take(found_dists, k)])
+    matched = count(r -> r <= length(f) && isapprox(f[r], true_dists[r]; rtol = rtol, atol = atol), 1:k)
+    return matched / k
+end
+
+"""
+    min_match(X, Q, true_dists, results, k) -> Float64
+
+Smallest `distance_match` over the queries; `results[j] = (ids, dists)` answers query
+column j and the distances are recomputed in Float64 from the returned ids. Exact methods
+must return `1.0`; the experiments fail otherwise.
+"""
+function min_match(X::AbstractMatrix, Q::AbstractMatrix, true_dists::AbstractMatrix{<:Real},
+                   results, k::Int)
+    worst = 1.0
+    for (j, (ids, _)) in enumerate(results)
+        q = view(Q, :, j)
+        rd = Float64[dist64(view(X, :, i), q) for i in Iterators.take(ids, k)]
+        worst = min(worst, distance_match(rd, view(true_dists, :, j), k))
+    end
+    return worst
+end
+
+min_match(ds::Dataset, results, k::Int) = min_match(ds.train, ds.test, ds.distances, results, k)
 ```
 
 In `bench/src/BenchCore.jl`, add `include("recall.jl")` on the line after `include("datasets.jl")`.
@@ -581,8 +658,8 @@ git commit -m "bench: ann-benchmarks and strict id recall rules with tie-case te
 - Modify: `bench/src/BenchCore.jl` (one include line), `bench/test/runtests.jl` (one include line)
 
 **Interfaces:**
-- Consumes: `BENCH_DIR` (Task 1).
-- Produces: `check_protocol() -> nothing` (errors unless `Threads.nthreads() == 1`; sets `BLAS.set_num_threads(1)`), `best_of(f; passes = 3) -> (last_result, seconds::Float64)`, `time_queries(f, qs; passes = 3) -> (results::Vector, seconds::Float64)` where `f(q)` answers one query, `write_env(path; manifest) -> path`.
+- Consumes: `BENCH_DIR`, `is_smoke`, the `SEED_*` constants (Task 1).
+- Produces: `check_protocol() -> nothing` (errors unless `Threads.nthreads() == 1`; sets `BLAS.set_num_threads(1)`), `best_of(f; passes = 3) -> (last_result, seconds::Float64)`, `time_queries(f, qs; passes = 3) -> (results::Vector, seconds::Float64)` where `f(q)` answers one query, `write_env(path; manifest) -> path` (writes `julia_version`, `manifest_sha256`, `cpu_model`, `governor`, `cpus_allowed`, `threads`, `blas_threads`, `hnng_commit`, `dirty`, `smoke`, `seeds`, `pkg_versions`, `kernel`, `date`, one `key=value` per line).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -604,15 +681,28 @@ using LinearAlgebra
         core = joinpath(BENCH_DIR, "src", "BenchCore.jl")
         script = "include(raw\"$core\"); using .BenchCore; check_protocol()"
         cmd = `$(Base.julia_cmd()) -t 2 --project=$(BENCH_DIR) -e $script`
-        @test !success(pipeline(cmd; stdout = devnull, stderr = devnull))
+        err = IOBuffer()
+        proc = run(pipeline(ignorestatus(cmd); stdout = devnull, stderr = err))
+        @test !success(proc)
+        # the refusal message, so a child that merely failed to load BenchCore does not pass
+        @test occursin("needs `julia -t 1`", String(take!(err)))
     end
 
     @testset "best_of keeps the fastest of three passes" begin
         durations = [0.06, 0.02, 0.04]
         calls = Ref(0)
-        out, best = best_of(() -> (calls[] += 1; sleep(durations[calls[]]); calls[]))
+        spans = Float64[]                 # the time each pass really took
+        out, best = best_of() do
+            calls[] += 1
+            t0 = time_ns()
+            sleep(durations[calls[]])
+            push!(spans, (time_ns() - t0) / 1e9)
+            calls[]
+        end
         @test calls[] == 3 && out == 3
-        @test 0.019 < best < 0.039
+        # the fastest pass is the 0.02 s one; no tight upper bound (a loaded CI machine oversleeps)
+        @test 0.019 <= best <= 0.2
+        @test best <= minimum(spans[[1, 3]])
     end
 
     @testset "time_queries: one warm-up call, then three timed passes" begin
@@ -631,11 +721,17 @@ using LinearAlgebra
             p = write_env(joinpath(dir, "env.txt"))
             txt = read(p, String)
             for key in ("julia_version=", "manifest_sha256=", "cpu_model=", "governor=",
-                        "cpus_allowed=", "threads=1", "blas_threads=1", "hnng_commit=", "date=")
+                        "cpus_allowed=", "threads=1", "blas_threads=1", "hnng_commit=", "date=",
+                        "dirty=", "smoke=", "seeds=", "pkg_versions=", "kernel=")
                 @test occursin(key, txt)
             end
             @test occursin("julia_version=$(VERSION)", txt)
             @test match(r"manifest_sha256=[0-9a-f]{64}", txt) !== nothing
+            @test occursin("smoke=true", txt)                       # the test preamble sets BENCH_SMOKE=1
+            @test occursin("seeds=GAUSS_TRAIN=1000,", txt) && occursin(",HNSW=9000", txt)
+            @test match(r"^dirty=(true|false|unknown)$"m, txt) !== nothing
+            @test occursin("pkg_versions=", txt) && occursin("NearestNeighbors=", txt)
+            @test match(r"^kernel=\S+"m, txt) !== nothing
         end
     end
 end
@@ -709,7 +805,9 @@ end
 
 Records Julia version, the Manifest.toml SHA-256, CPU model, cpufreq governor (when the
 sysfs file exists), allowed CPUs (shows the taskset pinning), thread counts, the HNNG.jl
-commit and the date, one `key=value` per line.
+commit, whether the working tree had uncommitted changes outside `bench/results*`
+(`dirty`), whether this is a smoke run, the seeds, the versions of the benchmarked
+packages, the kernel and the date, one `key=value` per line.
 """
 function write_env(path::AbstractString; manifest::AbstractString = joinpath(BENCH_DIR, "Manifest.toml"))
     cpu = something(first_line_value("/proc/cpuinfo", "model name"), "unknown")
@@ -717,10 +815,30 @@ function write_env(path::AbstractString; manifest::AbstractString = joinpath(BEN
     governor = isfile(gov_file) ? strip(read(gov_file, String)) : "not available"
     allowed = something(first_line_value("/proc/self/status", "Cpus_allowed_list"), "unknown")
     mhash = isfile(manifest) ? bytes2hex(open(sha256, manifest)) : "no-manifest"
+    root = dirname(BENCH_DIR)
     commit = try
-        strip(read(`git -C $(dirname(BENCH_DIR)) rev-parse HEAD`, String))
+        strip(read(`git -C $root rev-parse HEAD`, String))
     catch
         "unknown"
+    end
+    dirty = try
+        status = read(`git -C $root status --porcelain -- . ":(exclude)bench/results" ":(exclude)bench/results-smoke" ":(exclude)bench/run.log"`, String)
+        string(!isempty(strip(status)))
+    catch
+        "unknown"
+    end
+    seeds = join(("GAUSS_TRAIN=$SEED_GAUSS_TRAIN", "GAUSS_QUERY=$SEED_GAUSS_QUERY",
+                  "BLOBS_CENTRES=$SEED_BLOBS_CENTRES", "BLOBS_TRAIN=$SEED_BLOBS_TRAIN",
+                  "BLOBS_QUERY=$SEED_BLOBS_QUERY", "EXP3_POINTS=$SEED_EXP3_POINTS",
+                  "EXP3_DELETE=$SEED_EXP3_DELETE", "EXP3_CHECK=$SEED_EXP3_CHECK",
+                  "HNSW=$SEED_HNSW"), ",")
+    versions = Dict(info.name => info.version for (_, info) in Pkg.dependencies())
+    pkgs = join(("$name=$(get(versions, name, "absent"))" for name in
+                 ("HNSW", "NearestNeighbors", "HDF5", "SimilaritySearch", "CairoMakie", "DataFrames")), ",")
+    kernel = try
+        "$(Sys.KERNEL) $(strip(read(`uname -r`, String)))"
+    catch
+        string(Sys.KERNEL)
     end
     lines = [
         "julia_version=$(VERSION)",
@@ -731,6 +849,11 @@ function write_env(path::AbstractString; manifest::AbstractString = joinpath(BEN
         "threads=$(Threads.nthreads())",
         "blas_threads=$(BLAS.get_num_threads())",
         "hnng_commit=$commit",
+        "dirty=$dirty",
+        "smoke=$(is_smoke())",
+        "seeds=$seeds",
+        "pkg_versions=$pkgs",
+        "kernel=$kernel",
         "date=$(Dates.format(Dates.now(), dateformat"yyyy-mm-ddTHH:MM:SS"))",
     ]
     mkpath(dirname(path))
@@ -762,8 +885,8 @@ git commit -m "bench: single-thread protocol check, best-of-three timing, env.tx
 - Modify: `bench/src/BenchCore.jl` (one include line), `bench/test/runtests.jl` (one include line)
 
 **Interfaces:**
-- Consumes: `dist64`, `synthetic`, `gaussian`, `ground_truth`, `columns` (Task 1); `mean_recalls` (Task 2); HNNG API (header table).
-- Produces: `abstract type BenchMethod`; `method_name(m)::String`; `build(m, X::Matrix{Float32}) -> handle`; `query(handle, q::AbstractVector{Float32}, k::Int) -> (Vector{Int}, Vector{Float64})` sorted by (distance, id), at most `k` entries; `build_time(m, X) -> (handle, seconds)`; `canonical(ids, dists) -> (Vector{Int}, Vector{Float64})`; methods `HNNGIncremental()`, `HNNGBulk()` (handle `HNNGHandle` with field `idx`), `BruteBLAS()` (`BruteHandle`), `KDTreeNN(; leafsize = 25)`, `BallTreeNN(; leafsize = 25)` (`TreeHandle`); `fraction_evaluated(h::HNNGHandle, qs, k) -> Float64`.
+- Consumes: `dist64`, `synthetic`, `gaussian`, `ground_truth`, `columns` (Task 1); `mean_recalls`, `min_match` (Task 2); HNNG API (header table).
+- Produces: `abstract type BenchMethod`; `method_name(m)::String`; `build(m, X::Matrix{Float32}) -> handle`; `query(handle, q::AbstractVector{Float32}, k::Int) -> (Vector{Int}, Vector{Float64})` sorted by (distance, id), at most `k` entries; `build_time(m, X) -> (handle, seconds)`; `canonical(ids, dists) -> (Vector{Int}, Vector{Float64})` (returns its input converted when it is already sorted by (distance, id), sorts only otherwise); methods `HNNGIncremental()`, `HNNGBulk()` (handle `HNNGHandle` with field `idx`), `BruteBLAS()` (`BruteHandle`), `KDTreeNN(; leafsize = 25)`, `BallTreeNN(; leafsize = 25)` (`TreeHandle`); `fraction_evaluated(h::HNNGHandle, qs, k) -> Float64`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -789,7 +912,17 @@ include(joinpath(@__DIR__, "setup.jl"))
             @test all(issorted(collect(zip(r[2], r[1]))) for r in res)
             ra, _ = mean_recalls(X, Q, nb, gd, res, 10)
             @test ra == 1.0
+            @test min_match(X, Q, gd, res, 10) == 1.0       # all ten distances, not only the additive rule
         end
+    end
+
+    @testset "canonical sorts by (distance, id) only when needed" begin
+        @test canonical([5, 3, 9], [1.0, 1.0, 0.5]) == ([9, 3, 5], [0.5, 1.0, 1.0])
+        @test canonical([9, 3], [1.0, 1.0]) == ([3, 9], [1.0, 1.0])        # tie in distance: smaller id first
+        ids = [3, 5, 9]
+        cid, cds = canonical(ids, Float32[0.5, 1.0, 1.0])                  # already sorted: no reordering,
+        @test cid === ids && cds == [0.5, 1.0, 1.0] && cds isa Vector{Float64}   # ids passed through, dists widened
+        @test canonical(Int[], Float64[]) == (Int[], Float64[])
     end
 
     @testset "hNNG fraction evaluated" begin
@@ -849,10 +982,26 @@ A benchmarked method. Interface:
 """
 abstract type BenchMethod end
 
-"Sort by (distance, id) and convert to (Vector{Int}, Vector{Float64})."
+"True when (dists, ids) is already ordered by (distance, id): the common case, checked without allocating."
+function is_canonical(ids::AbstractVector, dists::AbstractVector)
+    @inbounds for j in 2:length(ids)
+        dists[j-1] < dists[j] || (dists[j-1] == dists[j] && ids[j-1] <= ids[j]) || return false
+    end
+    return true
+end
+
+"""
+Order by (distance, id) and convert to (Vector{Int}, Vector{Float64}). NearestNeighbors.jl,
+HNSW.jl and SimilaritySearch already return sorted results, so the sort (which allocates)
+runs only when `is_canonical` fails, e.g. on ties; the timed query path of the baselines is
+then not charged for it.
+"""
 function canonical(ids::AbstractVector, dists::AbstractVector)
-    p = sort(collect(eachindex(ids)); by = j -> (dists[j], ids[j]))
-    return Int[ids[j] for j in p], Float64[dists[j] for j in p]
+    if !is_canonical(ids, dists)
+        p = sort(collect(eachindex(ids)); by = j -> (dists[j], ids[j]))
+        ids, dists = ids[p], dists[p]
+    end
+    return convert(Vector{Int}, ids), convert(Vector{Float64}, dists)
 end
 
 """
@@ -1030,9 +1179,19 @@ include(joinpath(@__DIR__, "setup.jl"))
             for (m, minrecall) in ((SSExhaustive(), 1.0), (SSSearchGraph(), 0.9))
                 h, _ = build_time(m, X)
                 res = [query(h, q, 10) for q in qs]
+                # result convention, checked: only filled slots come back (no padding id),
+                # every id is a column of X, and distances are Euclidean, not squared
+                @test all(r -> length(r[1]) == 10 && all(i -> 1 <= i <= size(X, 2), r[1]), res)
+                @test all(j -> all(isapprox.(res[j][2], [dist64(view(X, :, i), qs[j]) for i in res[j][1]];
+                                             rtol = 1e-4, atol = 1e-4)), eachindex(res))
                 ra, _ = mean_recalls(X, Q, nb, gd, res, 10)
                 @test ra >= minrecall
             end
+            # exact duplicates come back as separate neighbours (neardup = 0f0 folds them, expand! restores them)
+            Xd = hcat(X[:, 1:100], X[:, 1:100])                  # every point twice
+            hd = build(SSSearchGraph(), Xd)
+            ids, ds = query(hd, X[:, 1], 2)
+            @test sort(ids) == [1, 101] && all(<(1e-4), ds)
         else
             @info "SimilaritySearch not loaded; SS rows are skipped"
             @test_skip HAS_SS
@@ -1104,27 +1263,40 @@ end
 "The SimilaritySearch methods, or none when the package did not load."
 optional_methods() = HAS_SS ? BenchMethod[SSSearchGraph(), SSExhaustive()] : BenchMethod[]
 
+# Calls follow the SimilaritySearch.jl searchgraph tutorial (v1.6.5): positional constructors,
+# SimilaritySearch's own metric `Dist.L2()` (Euclidean, not squared, like every other method),
+# and one query at a time through `search(index, ctx, q, knnqueue(ctx, k))`, read with `IdDistView`.
+# `neardup = 0f0` folds exact duplicate points into cluster members and a query then returns one
+# representative per duplicate group, which under-counts recall on data with repeated points
+# (Fashion-MNIST); `expand!` after each search gives back the raw k nearest, members included.
 function build(::SSSearchGraph, X::Matrix{Float32})
     SS = SimilaritySearch
-    g = SS.SearchGraph(; dist = Euclidean(), db = SS.MatrixDatabase(X))
-    ctx = SS.SearchGraphContext()
+    g = SS.SearchGraph(SS.Dist.L2(), SS.MatrixDatabase(X))
+    ctx = SS.SearchGraphContext(; neighborhood = SS.Neighborhood(; neardup = 0f0))
     SS.index!(g, ctx)
     return SSHandle(g, ctx)
 end
 function build(::SSExhaustive, X::Matrix{Float32})
     SS = SimilaritySearch
-    return SSHandle(SS.ExhaustiveSearch(; dist = Euclidean(), db = SS.MatrixDatabase(X)), SS.GenericContext())
+    return SSHandle(SS.ExhaustiveSearch(SS.Dist.L2(), SS.MatrixDatabase(X)), SS.GenericContext())
 end
 function query(h::SSHandle, q::AbstractVector{Float32}, k::Int)
     SS = SimilaritySearch
-    Q = SS.MatrixDatabase(reshape(convert(Vector{Float32}, q), :, 1))
-    ids, ds = SS.searchbatch(h.index, h.ctx, Q, k)     # (ids, dists) matrices, k × 1
-    keep = findall(>(0), vec(ids))                      # 0 marks an empty slot
-    return canonical(vec(ids)[keep], vec(ds)[keep])
+    qv = convert(Vector{Float32}, q)
+    res = SS.knnqueue(h.ctx, k)
+    SS.search(h.index, h.ctx, qv, res)
+    h.index isa SS.SearchGraph && SS.expand!(h.index, h.ctx, qv, res)   # raw neighbours, duplicates included
+    ids = Int[]
+    ds = Float64[]
+    for p in SS.IdDistView(res)            # only filled slots are visited: no padding convention to decode
+        push!(ids, Int(p.id))
+        push!(ds, Float64(p.dist))
+    end
+    return canonical(ids, ds)
 end
 ```
 
-If an `SS.*` call throws with the installed SimilaritySearch, read its docstrings (`julia --project=bench -e 'import SimilaritySearch; @doc SimilaritySearch.SearchGraph'`, likewise `searchbatch`, `ExhaustiveSearch`) and adjust only these two `build` methods and `query(::SSHandle, ...)` until the optional testset passes. The experiments skip SS rows on any error, so this never blocks the other rows.
+If an `SS.*` call throws with the installed SimilaritySearch, read its docstrings (`julia --project=bench -e 'import SimilaritySearch; @doc SimilaritySearch.SearchGraph'`, likewise `search`, `knnqueue`, `expand!`, `ExhaustiveSearch`) and adjust only these two `build` methods and `query(::SSHandle, ...)` until the optional testset passes; keep the three properties the testset checks (Euclidean distances, ids in `1:n` with no padding, duplicate points returned separately). The experiments skip SS rows on any error, so this never blocks the other rows.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -1147,10 +1319,10 @@ git commit -m "bench: HNSW.jl adapter with online insert, optional SimilaritySea
 - Modify: `bench/test/runtests.jl` (one include line)
 
 **Interfaces:**
-- Consumes: `load_hdf5`, `smoke_subset`, `data_dir`, `columns`, `Dataset` (Task 1); `mean_recalls` (Task 2); `check_protocol`, `time_queries` (Task 3); every adapter and `optional_methods` (Tasks 4–5); `empty_exp1`, `is_smoke`, `results_dir`, `HAS_HNSW` (Task 1).
-- Produces: `run_exp1(; smoke::Bool = is_smoke(), outdir = results_dir(smoke)) -> nothing`, writing `outdir/exp1.csv` (random-xs-20-euclidean) and `outdir/exp1b.csv` (fashion-mnist-784-euclidean) with schema `SCHEMA_EXP1`; `bench_dataset(ds::Dataset; k = 10, efs) -> DataFrame`; constants `EXP1_EFS = [10, 20, 40, 80, 160, 320, 640]`, `EXP1_EFS_SMOKE = [10, 40]`.
+- Consumes: `load_hdf5`, `smoke_subset`, `data_dir`, `columns`, `Dataset` (Task 1); `mean_recalls`, `min_match` (Task 2); `check_protocol`, `time_queries` (Task 3); every adapter and `optional_methods` (Tasks 4–5); `empty_exp1`, `is_smoke`, `results_dir`, `HAS_HNSW` (Task 1).
+- Produces: `run_exp1(; smoke::Bool = is_smoke(), outdir = results_dir(smoke)) -> nothing`, writing `outdir/exp1.csv` (random-xs-20-euclidean only) and `run_exp1b(; smoke, outdir) -> nothing`, writing `outdir/exp1b.csv` (fashion-mnist-784-euclidean), both with schema `SCHEMA_EXP1`; two separate entry points so that `run_all` can run the multi-hour Fashion-MNIST experiment last and skip a finished one (Task 11); `bench_dataset(ds::Dataset; k = 10, efs) -> DataFrame`; constants `EXP1_EFS = [10, 20, 40, 80, 160, 320, 640]`, `EXP1_EFS_SMOKE = [10, 40]`.
 
-Smoke sizes: first 300 train points and first 20 queries of each file, ground truth recomputed; `ef ∈ {10, 40}`.
+Smoke sizes: first 300 train points and first 20 queries of each file, ground truth recomputed; `ef ∈ {10, 40}`. For the five exact methods `bench_dataset` also requires `min_match == 1.0` (assumption A25), logs `min_match=<value>` per method and errors otherwise.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1164,6 +1336,8 @@ isdefined(Main, :run_exp1) || include(joinpath(BENCH_DIR, "exp1.jl"))
 @testset "Exp.1 / Exp.1b smoke" begin
     mktempdir() do out
         run_exp1(; outdir = out)
+        @test !isfile(joinpath(out, "exp1b.csv"))       # run_exp1 is random-xs only
+        run_exp1b(; outdir = out)
         core = ["hNNG-incremental", "hNNG-bulk", "brute-BLAS", "KD-tree", "ball-tree"]
         for (file, name) in (("exp1.csv", "random-xs-20-euclidean"), ("exp1b.csv", "fashion-mnist-784-euclidean"))
             df = CSV.read(joinpath(out, file), DataFrame)
@@ -1195,7 +1369,7 @@ Expected: FAIL with `SystemError: opening file ".../bench/exp1.jl": No such file
 
 ```julia
 # Exp.1 (random-xs-20-euclidean) and Exp.1b (fashion-mnist-784-euclidean), spec §11.
-# Run: julia -t 1 --project=bench bench/exp1.jl        (BENCH_SMOKE=1 for the tiny version)
+# Run: julia -t 1 --project=bench bench/exp1.jl        (BENCH_SMOKE=1 for the tiny version; runs both)
 isdefined(Main, :BenchCore) || include(joinpath(@__DIR__, "src", "BenchCore.jl"))
 using .BenchCore
 using CSV, DataFrames
@@ -1204,7 +1378,6 @@ import HNNG
 const EXP1_EFS = [10, 20, 40, 80, 160, 320, 640]
 const EXP1_EFS_SMOKE = [10, 40]
 const EXP1_K = 10
-const EXP1_FILES = [("exp1.csv", "random-xs-20-euclidean"), ("exp1b.csv", "fashion-mnist-784-euclidean")]
 
 function exp1_dataset(name::AbstractString, smoke::Bool)
     ds = load_hdf5(joinpath(data_dir(), name * ".hdf5"))
@@ -1225,6 +1398,9 @@ function bench_dataset(ds::Dataset; k::Int = EXP1_K, efs = EXP1_EFS)
     for m in BenchMethod[HNNGIncremental(), HNNGBulk(), BruteBLAS(), KDTreeNN(), BallTreeNN()]
         h, bt = build_time(m, ds.train)
         results, seconds = time_queries(q -> query(h, q, k), qs)
+        mm = min_match(ds, results, k)         # exactness beyond the additive recall rule (A25)
+        @info "Exp.1 exactness dataset=$(ds.name) method=$(method_name(m)) min_match=$mm"
+        mm == 1.0 || error("Exp.1: $(method_name(m)) is not exact on $(ds.name) (min_match $mm)")
         if h isa HNNGHandle
             s = HNNG.stats(h.idx)
             row!(method_name(m), "", bt, results, seconds;
@@ -1254,25 +1430,32 @@ function bench_dataset(ds::Dataset; k::Int = EXP1_K, efs = EXP1_EFS)
     return df
 end
 
-function run_exp1(; smoke::Bool = is_smoke(), outdir::AbstractString = results_dir(smoke))
+function run_exp1_file(file::AbstractString, name::AbstractString, smoke::Bool, outdir::AbstractString)
     check_protocol()
     mkpath(outdir)
-    for (file, name) in EXP1_FILES
-        df = bench_dataset(exp1_dataset(name, smoke); efs = smoke ? EXP1_EFS_SMOKE : EXP1_EFS)
-        CSV.write(joinpath(outdir, file), df)
-    end
+    df = bench_dataset(exp1_dataset(name, smoke); efs = smoke ? EXP1_EFS_SMOKE : EXP1_EFS)
+    CSV.write(joinpath(outdir, file), df)
     return nothing
 end
 
+"Exp.1: random-xs-20-euclidean -> exp1.csv."
+run_exp1(; smoke::Bool = is_smoke(), outdir::AbstractString = results_dir(smoke)) =
+    run_exp1_file("exp1.csv", "random-xs-20-euclidean", smoke, outdir)
+
+"Exp.1b: fashion-mnist-784-euclidean -> exp1b.csv (hours in a full run)."
+run_exp1b(; smoke::Bool = is_smoke(), outdir::AbstractString = results_dir(smoke)) =
+    run_exp1_file("exp1b.csv", "fashion-mnist-784-euclidean", smoke, outdir)
+
 if abspath(PROGRAM_FILE) == @__FILE__
     run_exp1()
+    run_exp1b()
 end
 ```
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `BENCH_SMOKE=1 julia -t 1 --project=bench bench/test/test_exp1.jl`
-Expected: `Test Summary:` for `Exp.1 / Exp.1b smoke` with every test passing. Also run the script directly once: `BENCH_SMOKE=1 julia -t 1 --project=bench bench/exp1.jl && head -3 bench/results-smoke/exp1.csv`; the first line printed is `dataset,n,d,nq,k,method,param,build_s,qps,recall_ann,recall_id,frac_evaluated,nlevels,nclusters`.
+Expected: `Test Summary:` for `Exp.1 / Exp.1b smoke` with every test passing. Also run the script directly once: `BENCH_SMOKE=1 julia -t 1 --project=bench bench/exp1.jl && head -3 bench/results-smoke/exp1.csv && ls bench/results-smoke/exp1b.csv`; the first line printed is `dataset,n,d,nq,k,method,param,build_s,qps,recall_ann,recall_id,frac_evaluated,nlevels,nclusters`.
 
 - [ ] **Step 5: Commit**
 
@@ -1290,7 +1473,7 @@ git commit -m "bench: Exp.1 and Exp.1b on random-xs-20 and fashion-mnist-784" -m
 - Modify: `bench/test/runtests.jl` (one include line)
 
 **Interfaces:**
-- Consumes: `synthetic`, `ground_truth`, `columns` (Task 1); `mean_recalls` (Task 2); `check_protocol`, `time_queries` (Task 3); `HNNGBulk`, `KDTreeNN`, `BallTreeNN`, `BruteBLAS`, `build_time`, `query`, `fraction_evaluated`, `HNNGHandle` (Task 4); `empty_exp2` (Task 1).
+- Consumes: `synthetic`, `ground_truth`, `columns` (Task 1); `mean_recalls`, `min_match` (Task 2); `check_protocol`, `time_queries` (Task 3); `HNNGBulk`, `KDTreeNN`, `BallTreeNN`, `BruteBLAS`, `build_time`, `query`, `fraction_evaluated`, `HNNGHandle` (Task 4); `empty_exp2` (Task 1).
 - Produces: `run_exp2(; smoke::Bool = is_smoke(), outdir = results_dir(smoke)) -> DataFrame`, writing `outdir/exp2.csv` with schema `SCHEMA_EXP2`; `EXP2_DIMS = [2, 4, 8, 16, 32, 64, 128]`.
 
 Smoke sizes: `n = 300` for both geometries, 20 queries, `d ∈ {2, 8}`.
@@ -1359,6 +1542,10 @@ function run_exp2(; smoke::Bool = is_smoke(), outdir::AbstractString = results_d
             results, seconds = time_queries(q -> query(h, q, EXP2_K), qs)
             ra, _ = mean_recalls(X, Q, nb, gd, results, EXP2_K)
             ra == 1.0 || error("Exp.2: $(method_name(m)) is not exact on $geometry d=$d (recall $ra)")
+            # at low d the additive recall rule cannot see a (k+1)-th-neighbour answer; compare the distances (A25)
+            mm = min_match(X, Q, gd, results, EXP2_K)
+            @info "Exp.2 exactness geometry=$geometry d=$d method=$(method_name(m)) min_match=$mm"
+            mm == 1.0 || error("Exp.2: $(method_name(m)) returns a wrong neighbour on $geometry d=$d (min_match $mm)")
             frac, nlev = h isa HNNGHandle ?
                 (fraction_evaluated(h, qs, EXP2_K), HNNG.nlevels(h.idx)) : (missing, missing)
             push!(df, (geometry = geometry, n = n, d = d, nq = s.nq, k = EXP2_K,
@@ -1633,6 +1820,7 @@ function exp3_hnng!(df::DataFrame, c::Exp3Config, P::Matrix{Float32}, Qc::Matrix
     for j in 1:c.nops
         x = P[:, n + j]
         HNNG.reset_evals!(idx)
+        GC.gc(false)        # outside the timed region: garbage from the untimed check is not collected inside the insert (A26)
         t0 = time_ns()
         id = HNNG.add!(idx, x)
         t = seconds_since(t0)
@@ -1648,6 +1836,7 @@ function exp3_hnng!(df::DataFrame, c::Exp3Config, P::Matrix{Float32}, Qc::Matrix
         live = findall(alive)
         id = live[draw_index(rng, length(live))]
         HNNG.reset_evals!(idx)
+        GC.gc(false)        # as for the insert loop (A26)
         t0 = time_ns()
         HNNG.delete!(idx, id)
         t = seconds_since(t0)
@@ -1675,6 +1864,7 @@ function exp3_baselines!(df::DataFrame, c::Exp3Config, P::Matrix{Float32}, run::
     HAS_HNSW || return df
     h = build_hnsw(HNSWjl(), P; nbuild = n)
     for j in 1:c.nops
+        GC.gc(false)        # same treatment as the hNNG loops (A26)
         t0 = time_ns()
         hnsw_insert!(h, n + j)
         push!(df, (; base..., method = "HNSW", op = "insert", seq = j, latency_s = seconds_since(t0),
@@ -1968,7 +2158,7 @@ end
 # ---- tab:ops -------------------------------------------------------------------------
 "One tab:ops row; speedup = rebuild / insert (assumption A8)."
 ops_row(n, d, ins, del, reb) = string(fmt_int(n), " (\$", d, "\$) & ", fmt_ms(ins), " & ", fmt_ms(del),
-    " & ", fmt_s(reb), " \;\;(\$\\sim\$", fmt_int(reb / ins), "\$\\times\$)", ROW_END)
+    " & ", fmt_s(reb), " \\;\\;(\$\\sim\$", fmt_int(reb / ins), "\$\\times\$)", ROW_END)
 
 "Per table configuration, sorted by (n, d): median over runs of the per-run mean latency."
 function ops_summary(exp3::AbstractDataFrame)
@@ -1982,7 +2172,7 @@ end
 
 function ops_tex(exp3::AbstractDataFrame)
     lines = String["\\begin{tabular}{lccc}", "\\hline",
-                   "\$n\$ (\$d\$) & insert/op & delete/op & rebuild/op \;(speedup)" * ROW_END, "\\hline"]
+                   "\$n\$ (\$d\$) & insert/op & delete/op & rebuild/op \\;(speedup)" * ROW_END, "\\hline"]
     for r in eachrow(ops_summary(exp3))
         push!(lines, ops_row(r.n, r.d, r.insert_s, r.delete_s, r.rebuild_s))
     end
@@ -2099,7 +2289,9 @@ git commit -m "bench: TKDE-layout LaTeX tables and manuscript macros from the CS
 
 **Interfaces:**
 - Consumes: `op_latency`, `empty_exp3`, `results_dir` (Tasks 1, 8); CSV columns of `SCHEMA_EXP1/2/3`.
-- Produces: `plot_recall_qps(exp1, path)`, `plot_dist_eval(exp2, path)`, `plot_qps_dim(exp2, path)`, `plot_ops(exp3, path)`, each returning `path`; `write_plots(resdir = results_dir()) -> figdir`, writing `fig/recall_qps.pdf` (from exp1.csv, random-xs), `fig/dist_eval_vs_dim.pdf`, `fig/qps_vs_dim.pdf` (from exp2.csv), `fig/ops_comparison.pdf` (from every hNNG row of exp3.csv); helper `n_label(n) -> String` (`8000 -> "8k"`).
+- Produces: `plot_recall_qps(exp1, path)`, `plot_dist_eval(exp2, path)`, `plot_qps_dim(exp2, path)`, `plot_ops(exp3, path)`, each returning `path`; constants `FIG_SINGLE`, `FIG_DOUBLE`, `FIG_FONT`; `write_plots(resdir = results_dir()) -> figdir`, writing `fig/recall_qps.pdf` (from exp1.csv, random-xs), `fig/dist_eval_vs_dim.pdf`, `fig/qps_vs_dim.pdf` (from exp2.csv), `fig/ops_comparison.pdf` (from every hNNG row of exp3.csv); helper `n_label(n) -> String` (`8000 -> "8k"`).
+
+Sizes: every figure is designed at its final print size and saved with `save(path, fig; pt_per_unit = 1)`, so `Figure(size = ...)` is in pt (assumption A24): `FIG_SINGLE = (215, 165)` for the three single-column figures and `FIG_DOUBLE = (450, 150)` for `ops_comparison` (a double-column `figure*` in the manuscript), all with `fontsize = 8`.
 
 Encoding: one colour and marker per method in a fixed order, the same in every figure. The palette was checked with the dataviz validator on a light surface: all checks pass; three hues sit below 3:1 contrast, so every series also has its own marker, and every figure has a legend. `ops_comparison` follows the TKDE layout: three panels side by side, one per `d` (titles `d = 16`, `d = 64`, `d = 128`), x = n on a log axis with ticks 8k, 16k, 32k, y = milliseconds per operation on a log axis, three lines (full rebuild per op, incremental insert, incremental delete) that differ in colour, marker and line style, a text label `rebuild/insert ≈ N×` at the largest n in each panel, and one shared legend below. One y-axis per panel (linked), no dual axes.
 
@@ -2136,11 +2328,27 @@ ispdf(p) = isfile(p) && filesize(p) > 1000 && open(io -> String(read(io, 4)), p)
     end
     @test n_label(8000) == "8k" && n_label(32000) == "32k" && n_label(300) == "300"
     @test speedup_label(0.46, 0.0011) == "rebuild/insert ≈ 418×"
+    @test FIG_SINGLE == (215, 165) && FIG_DOUBLE == (450, 150) && FIG_FONT == 8
+    # the page size in pt, as poppler's pdfinfo reports it: 1 Makie unit = 1 pt (pt_per_unit = 1)
+    page_pts(p) = (m = match(r"Page size:\s+([\d.]+) x ([\d.]+)", read(`pdfinfo $p`, String));
+                   (parse(Float64, m[1]), parse(Float64, m[2])))
     mktempdir() do dir
-        @test ispdf(plot_recall_qps(exp1, joinpath(dir, "recall_qps.pdf")))
-        @test ispdf(plot_dist_eval(exp2, joinpath(dir, "dist_eval_vs_dim.pdf")))
-        @test ispdf(plot_qps_dim(exp2, joinpath(dir, "qps_vs_dim.pdf")))
-        @test ispdf(plot_ops(exp3, joinpath(dir, "ops_comparison.pdf")))
+        made = ("recall_qps" => plot_recall_qps(exp1, joinpath(dir, "recall_qps.pdf")),
+                "dist_eval_vs_dim" => plot_dist_eval(exp2, joinpath(dir, "dist_eval_vs_dim.pdf")),
+                "qps_vs_dim" => plot_qps_dim(exp2, joinpath(dir, "qps_vs_dim.pdf")),
+                "ops_comparison" => plot_ops(exp3, joinpath(dir, "ops_comparison.pdf")))
+        for (_, p) in made
+            @test ispdf(p)
+        end
+        if Sys.which("pdfinfo") === nothing
+            @info "pdfinfo not found; PDF page sizes not checked"
+        else
+            for (name, p) in made
+                want = name == "ops_comparison" ? FIG_DOUBLE : FIG_SINGLE
+                w, h = page_pts(p)
+                @test abs(w - want[1]) <= 1 && abs(h - want[2]) <= 1
+            end
+        end
     end
 end
 ```
@@ -2186,16 +2394,28 @@ const OPS_LINES = [
     ("delete",  "incremental delete",  "#1baf7a", :diamond, :dash),
 ]
 
+# Final print sizes in pt: with `pt_per_unit = 1` one Makie unit is one PDF point, so the text
+# is 8 pt on the page. sn-jnl `iicol`: column 215 pt (76 mm), double column 453 pt (160 mm).
+const FIG_SINGLE = (215, 165)    # one column
+const FIG_DOUBLE = (450, 150)    # ops_comparison: figure* across both columns
+const FIG_FONT = 8
+const MS = 5                     # marker size (pt)
+const LW = 1                     # line width (pt)
+# Compact legend for a 215 pt column.
+const LEGEND_STYLE = (framevisible = false, labelsize = 7, patchsize = (14, 8), padding = (2, 2, 2, 2),
+                rowgap = 0, colgap = 6)
+
 function save_pdf(fig, path::AbstractString)
     mkpath(dirname(path))
-    save(path, fig)
+    save(path, fig; pt_per_unit = 1)
     return path
 end
-dim_ticks(ds) = (ds, string.(ds))
+"Ticks at the dimensions `ds`, optionally only every `step`-th one (a half-column panel fits four labels)."
+dim_ticks(ds; step::Int = 1) = (ds[1:step:end], string.(ds[1:step:end]))
 
 "Recall vs QPS on random-xs: HNSW traces a frontier, exact methods are points at recall 1."
 function plot_recall_qps(exp1::AbstractDataFrame, path::AbstractString)
-    fig = Figure(size = (600, 420), fontsize = 14)
+    fig = Figure(size = FIG_SINGLE, fontsize = FIG_FONT)
     ax = Axis(fig[1, 1]; xlabel = "recall (ann-benchmarks rule, k = 10)", ylabel = "queries per second",
               yscale = log10)
     for m in METHOD_ORDER
@@ -2204,19 +2424,19 @@ function plot_recall_qps(exp1::AbstractDataFrame, path::AbstractString)
         st = METHOD_STYLE[m]
         x, y = Float64.(r.recall_ann), Float64.(r.qps)
         if nrow(r) > 1
-            scatterlines!(ax, x, y; color = st.color, marker = st.marker, markersize = 10, linewidth = 2, label = st.label)
+            scatterlines!(ax, x, y; color = st.color, marker = st.marker, markersize = MS, linewidth = LW, label = st.label)
         else
-            scatter!(ax, x, y; color = st.color, marker = st.marker, markersize = 12, label = st.label)
+            scatter!(ax, x, y; color = st.color, marker = st.marker, markersize = MS + 2, label = st.label)
         end
     end
-    axislegend(ax; position = :lb, framevisible = false)
+    axislegend(ax; position = :lb, LEGEND_STYLE...)
     return save_pdf(fig, path)
 end
 
 "ρ(d): fraction of points hNNG evaluates per query, both Exp.2 geometries."
 function plot_dist_eval(exp2::AbstractDataFrame, path::AbstractString)
     ds = sort(unique(Int.(exp2.d)))
-    fig = Figure(size = (600, 420), fontsize = 14)
+    fig = Figure(size = FIG_SINGLE, fontsize = FIG_FONT)
     ax = Axis(fig[1, 1]; xlabel = "dimension d", ylabel = "fraction of points evaluated ρ",
               xscale = log2, xticks = dim_ticks(ds), limits = (nothing, (0, 1.05)))
     for g in ("gaussian", "blobs")
@@ -2224,35 +2444,35 @@ function plot_dist_eval(exp2::AbstractDataFrame, path::AbstractString)
         nrow(r) == 0 && continue
         st = GEOMETRY_STYLE[g]
         scatterlines!(ax, Int.(r.d), Float64.(r.frac_evaluated); color = st.color, marker = st.marker,
-                      markersize = 10, linewidth = 2, label = "$(st.label), n = $(r.n[1])")
+                      markersize = MS, linewidth = LW, label = "$(st.label), n = $(r.n[1])")
     end
-    axislegend(ax; position = :rb, framevisible = false)
+    axislegend(ax; position = :rb, LEGEND_STYLE...)
     return save_pdf(fig, path)
 end
 
-"QPS vs d for the exact methods; one panel per geometry, shared legend below."
+"QPS vs d for the exact methods; one panel per geometry (half a column each), shared legend below."
 function plot_qps_dim(exp2::AbstractDataFrame, path::AbstractString)
     ds = sort(unique(Int.(exp2.d)))
-    fig = Figure(size = (900, 460), fontsize = 14)
+    fig = Figure(size = FIG_SINGLE, fontsize = FIG_FONT)
     panels = Axis[]
     for g in ("gaussian", "blobs")
         sub = exp2[exp2.geometry .== g, :]
         nrow(sub) == 0 && continue
         ax = Axis(fig[1, length(panels) + 1]; title = "$(GEOMETRY_STYLE[g].label), n = $(sub.n[1])",
                   xlabel = "dimension d", ylabel = isempty(panels) ? "queries per second" : "",
-                  xscale = log2, yscale = log10, xticks = dim_ticks(ds))
+                  xscale = log2, yscale = log10, xticks = dim_ticks(ds; step = 2))
         push!(panels, ax)
         for m in METHOD_ORDER
             r = sort(sub[sub.method .== m, :], :d)
             nrow(r) == 0 && continue
             st = METHOD_STYLE[m]
             scatterlines!(ax, Int.(r.d), Float64.(r.qps); color = st.color, marker = st.marker,
-                          markersize = 10, linewidth = 2, label = st.label)
+                          markersize = MS, linewidth = LW, label = st.label)
         end
     end
     isempty(panels) && error("exp2 has no rows to plot")
     length(panels) > 1 && linkyaxes!(panels...)
-    Legend(fig[2, 1:length(panels)], panels[1]; orientation = :horizontal, framevisible = false)
+    Legend(fig[2, 1:length(panels)], panels[1]; orientation = :horizontal, nbanks = 2, LEGEND_STYLE...)
     return save_pdf(fig, path)
 end
 
@@ -2267,7 +2487,7 @@ function plot_ops(exp3::AbstractDataFrame, path::AbstractString)
     h = exp3[exp3.method .== "hNNG", :]
     ds = sort(unique(Int.(h.d)))
     isempty(ds) && error("exp3 has no hNNG rows to plot")
-    fig = Figure(size = (1100, 440), fontsize = 14)
+    fig = Figure(size = FIG_DOUBLE, fontsize = FIG_FONT)
     panels = Axis[]
     for (col, d) in enumerate(ds)
         sub = h[h.d .== d, :]
@@ -2281,17 +2501,17 @@ function plot_ops(exp3::AbstractDataFrame, path::AbstractString)
             s = lat[op]
             nrow(s) == 0 && continue
             scatterlines!(ax, Float64.(s.n), 1000 .* s.latency_s; color = color, marker = marker,
-                          linestyle = ls, markersize = 10, linewidth = 2, label = label)
+                          linestyle = ls, markersize = MS, linewidth = LW, label = label)
         end
         reb, ins = lat["rebuild"], lat["insert"]
         if nrow(reb) > 0 && nrow(ins) > 0
             text!(ax, Float64(reb.n[end]), 1000 * reb.latency_s[end];
                   text = speedup_label(reb.latency_s[end], ins.latency_s[end]),
-                  align = (:right, :bottom), offset = (-6, 6), fontsize = 12)
+                  align = (:right, :bottom), offset = (-3, 3), fontsize = 7)
         end
     end
     length(panels) > 1 && linkyaxes!(panels...)
-    Legend(fig[2, 1:length(panels)], panels[1]; orientation = :horizontal, framevisible = false)
+    Legend(fig[2, 1:length(panels)], panels[1]; orientation = :horizontal, LEGEND_STYLE...)
     return save_pdf(fig, path)
 end
 
@@ -2314,7 +2534,7 @@ end
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `BENCH_SMOKE=1 julia -t 1 --project=bench bench/test/test_plots.jl`
-Expected: `Test Summary:` for `plots` with 4 passing tests (the first run includes CairoMakie compilation, about a minute). The visual check of the real figures happens in Task 11, Step 4, once `run_all.jl` exists.
+Expected: `Test Summary:` for `plots` with every test passing, including the four page-size checks when `pdfinfo` is installed (the first run includes CairoMakie compilation, about a minute). The visual check of the real figures happens in Task 11, Step 4, once `run_all.jl` exists.
 
 - [ ] **Step 5: Commit**
 
@@ -2332,8 +2552,10 @@ git commit -m "bench: CairoMakie figures recall_qps, dist_eval_vs_dim, qps_vs_di
 - Modify: `bench/test/runtests.jl` (one include line), `README.md` (append a section; create the file with a title line if the index plan has not)
 
 **Interfaces:**
-- Consumes: `run_exp1`, `run_exp2`, `run_exp3`, `write_tables`, `write_plots`, `write_env`, `check_protocol`, `is_smoke`, `results_dir` (Tasks 1–10).
-- Produces: `run_all(; smoke::Bool = is_smoke(), outdir = results_dir(smoke)) -> outdir`; the executable `bench/run.sh`.
+- Consumes: `run_exp1`, `run_exp1b`, `run_exp2`, `run_exp3`, `write_tables`, `write_plots`, `write_env`, `check_protocol`, `is_smoke`, `results_dir` (Tasks 1–10).
+- Produces: `EXPERIMENTS` (name, CSV file, runner; in run order exp2, exp3, exp1, exp1b), `bench_force() -> Bool` (`BENCH_FORCE=1`), `bench_only() -> Union{Nothing,Symbol}` (`BENCH_ONLY`), `run_experiments(; smoke, outdir, force, select, experiments = EXPERIMENTS) -> Vector{Symbol}` (the experiments that actually ran), `run_all(; smoke::Bool = is_smoke(), outdir = results_dir(smoke), force = bench_force(), select = bench_only()) -> outdir`; the executable `bench/run.sh`.
+
+Run order and resumability (assumption A23): exp2, exp3, exp1 (random-xs only), exp1b (Fashion-MNIST, hours) last. `run_experiments` skips an experiment whose CSV exists in `outdir` unless `force` (`BENCH_FORCE=1`); smoke runs always rerun. `select` (`BENCH_ONLY=exp2|exp3|exp1|exp1b`) restricts the run to one experiment; skip-existing still applies to it, so rerunning one finished experiment needs `BENCH_FORCE=1` too. `run_all` writes the tables and figures only when all four CSVs exist, and warns about the missing ones otherwise.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2342,6 +2564,56 @@ git commit -m "bench: CairoMakie figures recall_qps, dist_eval_vs_dim, qps_vs_di
 ```julia
 include(joinpath(@__DIR__, "setup.jl"))
 isdefined(Main, :run_all) || include(joinpath(BENCH_DIR, "run_all.jl"))
+
+# A fake experiment that records its call and writes its CSV, to observe order and skipping.
+fake_experiment(name, file, calls) = (name = name, file = file,
+    run = function (args...; kw...)
+        push!(calls, name)
+        write(joinpath(kw[:outdir], file), "x\n")
+        return nothing
+    end)
+
+@testset "run_experiments: order, skip-existing, BENCH_ONLY, BENCH_FORCE" begin
+    @test [e.name for e in EXPERIMENTS] == [:exp2, :exp3, :exp1, :exp1b]       # Fashion-MNIST last
+    @test [e.file for e in EXPERIMENTS] == ["exp2.csv", "exp3.csv", "exp1.csv", "exp1b.csv"]
+    mktempdir() do out
+        calls = Symbol[]
+        fakes = [fake_experiment(:exp2, "exp2.csv", calls), fake_experiment(:exp3, "exp3.csv", calls),
+                 fake_experiment(:exp1, "exp1.csv", calls), fake_experiment(:exp1b, "exp1b.csv", calls)]
+        go(; smoke = false, force = false, select = nothing) =
+            run_experiments(; smoke, outdir = out, force, select, experiments = fakes)
+        @test go() == [:exp2, :exp3, :exp1, :exp1b] && calls == [:exp2, :exp3, :exp1, :exp1b]
+        empty!(calls)
+        @test isempty(go()) && isempty(calls)                       # every CSV exists: nothing is called
+        rm(joinpath(out, "exp3.csv"))                               # a crashed experiment left no CSV
+        @test go() == [:exp3] && calls == [:exp3]
+        empty!(calls)
+        @test go(; force = true) == [:exp2, :exp3, :exp1, :exp1b]   # BENCH_FORCE=1 reruns everything
+        empty!(calls)
+        @test isempty(go(; select = :exp1))                         # BENCH_ONLY alone still skips a finished CSV
+        @test go(; select = :exp1, force = true) == [:exp1] && calls == [:exp1]
+        empty!(calls)
+        @test go(; smoke = true) == [:exp2, :exp3, :exp1, :exp1b]   # smoke runs always rerun
+    end
+    withenv("BENCH_FORCE" => "1", "BENCH_ONLY" => "exp1b") do
+        @test bench_force() && bench_only() == :exp1b
+    end
+    withenv("BENCH_FORCE" => nothing, "BENCH_ONLY" => nothing) do
+        @test !bench_force() && bench_only() === nothing
+    end
+    withenv("BENCH_ONLY" => "exp9") do
+        @test_throws ErrorException bench_only()
+    end
+end
+
+@testset "run_all: tables and plots only when all four CSVs exist" begin
+    mktempdir() do out
+        run_all(; outdir = out, force = true, select = :exp2)
+        @test isfile(joinpath(out, "exp2.csv")) && isfile(joinpath(out, "env.txt"))
+        @test !isfile(joinpath(out, "exp1.csv"))
+        @test !isdir(joinpath(out, "tex")) && !isdir(joinpath(out, "fig"))
+    end
+end
 
 @testset "run_all smoke: every output file" begin
     mktempdir() do out
@@ -2386,16 +2658,67 @@ for (file, entry) in (("exp1.jl", :run_exp1), ("exp2.jl", :run_exp2), ("exp3.jl"
     isdefined(Main, entry) || include(joinpath(@__DIR__, file))
 end
 
-function run_all(; smoke::Bool = is_smoke(), outdir::AbstractString = results_dir(smoke))
+# Run order: exp2 and exp3 first (exp3 at n = 32000, d = 128 has never run at full size before
+# the real run), then exp1 (random-xs), and the multi-hour Fashion-MNIST experiment last, so a
+# late failure costs the least and the finished CSVs survive it.
+const EXPERIMENTS = [
+    (name = :exp2,  file = "exp2.csv",  run = run_exp2),
+    (name = :exp3,  file = "exp3.csv",  run = run_exp3),
+    (name = :exp1,  file = "exp1.csv",  run = run_exp1),
+    (name = :exp1b, file = "exp1b.csv", run = run_exp1b),
+]
+const RESULT_CSVS = ["exp1.csv", "exp1b.csv", "exp2.csv", "exp3.csv"]
+
+"BENCH_FORCE=1: rerun experiments whose CSV already exists."
+bench_force() = get(ENV, "BENCH_FORCE", "0") == "1"
+
+"BENCH_ONLY=exp1|exp1b|exp2|exp3: run only that experiment (`nothing` when unset)."
+function bench_only()
+    s = strip(get(ENV, "BENCH_ONLY", ""))
+    isempty(s) && return nothing
+    Symbol(s) in (e.name for e in EXPERIMENTS) ||
+        error("BENCH_ONLY must be one of exp1, exp1b, exp2, exp3; got $(repr(s))")
+    return Symbol(s)
+end
+
+"""
+    run_experiments(; smoke, outdir, force, select, experiments) -> Vector{Symbol}
+
+Runs `experiments` in order and returns the names of those that ran. An experiment whose CSV
+is already in `outdir` is skipped unless `force`; smoke runs always rerun, since their
+directory is scratch. `select` (a name) restricts the run to that experiment.
+"""
+function run_experiments(; smoke::Bool = is_smoke(), outdir::AbstractString = results_dir(smoke),
+                         force::Bool = bench_force(), select::Union{Nothing,Symbol} = bench_only(),
+                         experiments = EXPERIMENTS)
+    ran = Symbol[]
+    for e in experiments
+        select === nothing || e.name == select || continue
+        if !(force || smoke) && isfile(joinpath(outdir, e.file))
+            @info "$(e.name): $(e.file) exists, skipped (BENCH_FORCE=1 reruns it)"
+            continue
+        end
+        @info "running $(e.name)"
+        e.run(; smoke, outdir)
+        push!(ran, e.name)
+    end
+    return ran
+end
+
+function run_all(; smoke::Bool = is_smoke(), outdir::AbstractString = results_dir(smoke),
+                 force::Bool = bench_force(), select::Union{Nothing,Symbol} = bench_only())
     check_protocol()
     mkpath(outdir)
     write_env(joinpath(outdir, "env.txt"))
-    @info "benchmark results go to $outdir" smoke
-    run_exp1(; smoke, outdir)
-    run_exp2(; smoke, outdir)
-    run_exp3(; smoke, outdir)
-    write_tables(outdir)
-    write_plots(outdir)
+    @info "benchmark results go to $outdir" smoke force select
+    run_experiments(; smoke, outdir, force, select)
+    absent = [f for f in RESULT_CSVS if !isfile(joinpath(outdir, f))]
+    if isempty(absent)
+        write_tables(outdir)
+        write_plots(outdir)
+    else
+        @warn "tables and figures not written: missing $(join(absent, ", ")); rerun to continue" outdir
+    end
     return outdir
 end
 
@@ -2413,7 +2736,17 @@ end
 #   BENCH_SMOKE=1 bench/run.sh    tiny sizes -> bench/results-smoke/
 # BENCH_CPU picks the core (default 2), BENCH_RESULTS the output directory,
 # BENCH_DATA the directory holding the ann-benchmarks HDF5 files.
+# Resumable: experiments run in the order exp2, exp3, exp1, exp1b and one whose CSV already
+# exists is skipped, so after a crash simply run the same command again.
+#   BENCH_FORCE=1             rerun experiments even if their CSV exists
+#   BENCH_ONLY=exp3           run only one of exp1, exp1b, exp2, exp3
+# Tables and figures are written only when all four CSV files exist.
 set -euo pipefail
+export PATH="$HOME/.juliaup/bin:$PATH"     # juliaup's PATH entry lives in the login profile
+case "${BENCH_ONLY:-}" in
+    ""|exp1|exp1b|exp2|exp3) ;;
+    *) echo "run.sh: BENCH_ONLY must be one of exp1, exp1b, exp2, exp3 (got '${BENCH_ONLY}')" >&2; exit 1 ;;
+esac
 cd "$(dirname "$0")/.."
 command -v taskset >/dev/null || { echo "run.sh: taskset not found (util-linux)" >&2; exit 1; }
 julia --project=bench -e 'using Pkg; Pkg.instantiate()'
@@ -2439,7 +2772,17 @@ macros.tex  tab_annbench.tex  tab_fashion.tex  tab_ops.tex
 dist_eval_vs_dim.pdf  ops_comparison.pdf  qps_vs_dim.pdf  recall_qps.pdf
 ```
 
-Open the four PDFs in `bench/results-smoke/fig/` and check by eye: legends do not cover data, axis labels and ticks do not collide, every series named in the legend is visible. If a legend covers data, change only its `position` keyword in `bench/plots.jl` and rerun.
+Check the page sizes. The figures are designed at their print size (assumption A24), so the PDFs must be 215 × 165 pt (three single-column figures) and 450 × 150 pt (`ops_comparison`):
+
+```bash
+for f in recall_qps dist_eval_vs_dim qps_vs_dim ops_comparison; do
+    printf '%s: ' "$f"; pdfinfo "bench/results-smoke/fig/$f.pdf" | grep 'Page size'
+done
+```
+
+Expected: `recall_qps`, `dist_eval_vs_dim` and `qps_vs_dim` report `Page size: 215 x 165 pts` and `ops_comparison` reports `Page size: 450 x 150 pts` (within a point; `mutool info` shows the same MediaBox if `pdfinfo` is missing).
+
+Then open the four PDFs in `bench/results-smoke/fig/` at 100% zoom, so one PDF point is one screen point and the text is as large as it will be in the paper, and check by eye: the 8 pt text is legible, legends do not cover data, axis labels and ticks do not collide, every series named in the legend is visible. If a legend covers data, change only its `position` keyword in `bench/plots.jl` and rerun; if tick labels collide, reduce the number of ticks (`dim_ticks(...; step = 2)`) rather than the font size.
 
 - [ ] **Step 5: Append the README benchmark section**
 
@@ -2458,6 +2801,13 @@ bench/run.sh                    # full run, several hours, results in bench/resu
 BENCH_SMOKE=1 bench/run.sh      # every experiment on tiny inputs, results in bench/results-smoke/
 ```
 
+The experiments run in the order Exp.2, Exp.3, Exp.1 (random-xs), Exp.1b (Fashion-MNIST, the
+longest). An experiment whose CSV already exists is skipped, so after a crash the same command
+continues where it stopped; `BENCH_FORCE=1` reruns everything and `BENCH_ONLY=exp3` (one of `exp1`,
+`exp1b`, `exp2`, `exp3`) restricts the run to one experiment (combine with `BENCH_FORCE=1` to rerun a
+finished one). Tables and figures are written only when all four CSV files exist. Smoke runs always
+rerun everything.
+
 `BENCH_CPU` picks the core (default 2), `BENCH_DATA` the directory with the ann-benchmarks
 HDF5 files (default `/home/coral/working/benchmarks/data`), `BENCH_RESULTS` the output
 directory. One step at a time: `julia -t 1 --project=bench bench/exp1.jl` (likewise
@@ -2468,7 +2818,7 @@ directory. One step at a time: `julia -t 1 --project=bench bench/exp1.jl` (likew
 | `exp1.csv`, `exp1b.csv` | random-xs-20 and fashion-mnist-784: build time, QPS, both recalls, fraction evaluated, hNNG levels and cluster counts, one HNSW row per `ef` |
 | `exp2.csv` | Gaussian (n = 5,000) and 100 blobs (n = 10,000), d = 2 to 128: ρ, QPS, build time, levels |
 | `exp3.csv` | Gaussian grid n ∈ {8,000, 16,000, 32,000} × d ∈ {16, 64, 128}, every insert and delete: latency, distance evaluations, level-0 rewires, highest level touched; streaming and bulk rebuilds and the baselines |
-| `env.txt` | Julia version, Manifest hash, CPU model, governor, allowed CPUs, threads, commit, date |
+| `env.txt` | Julia version, Manifest hash, CPU model, governor, allowed CPUs, threads, commit and `dirty` flag, `smoke` flag, seeds, package versions, kernel, date |
 | `tex/` | `tab_annbench.tex`, `tab_fashion.tex`, `tab_ops.tex` (tabular bodies) and `macros.tex` |
 | `fig/` | `recall_qps.pdf`, `dist_eval_vs_dim.pdf`, `qps_vs_dim.pdf`, `ops_comparison.pdf` |
 
@@ -2477,11 +2827,19 @@ directory. One step at a time: `julia -t 1 --project=bench bench/exp1.jl` (likew
 | Threads | `julia -t 1` and `BLAS.set_num_threads(1)`, checked before every experiment |
 | CPU | process pinned with `taskset -c 2` |
 | Queries | one at a time, `k = 10`; QPS from the best of three timed passes after one warm-up query |
-| Build time | one timed build after a warm-up build on 200 points |
+| Build time | one timed build after an untimed warm-up build on 200 points (not best of three) |
 | Recall | ann-benchmarks rule (returned distance ≤ true k-th distance + 1e-3) and strict id recall, distances recomputed in Float64 from the returned ids |
 | Fraction evaluated ρ | distance evaluations per query (`HNNG.knn_counted`) divided by live elements |
-| Exp.3 | 200 inserts, then 200 deletes of random live ids; median over 3 runs of the mean latency per operation; 20 queries checked against brute force after every operation |
+| Exp.3 | 200 inserts, then 200 deletes of random live ids; median over 3 runs of the mean latency per operation (a `GC.gc(false)` before each timed operation, outside the timing); 20 queries checked against brute force after every operation |
 | Baselines | brute force (BLAS gemv, exact Float64 re-rank), KD-tree and ball tree (NearestNeighbors.jl, leaf size 25), HNSW.jl (M = 16, efConstruction = 200, ef from 10 to 640), SimilaritySearch.jl when it loads |
+| Exactness | the exact methods (hNNG, brute force, KD-tree, ball tree) must return the true k nearest distances (relative tolerance 1e-5) for every query of Exp.1, Exp.1b and Exp.2; the run fails otherwise |
+
+SimilaritySearch.jl method notes: its rows use `Dist.L2()` (Euclidean, like every other method) and
+`SearchGraphContext(; neighborhood = Neighborhood(; neardup = 0f0))` with `expand!` after each search.
+`neardup = 0f0` folds exact duplicate points into cluster members, so a plain search returns one
+representative per duplicate group and would under-count recall on data with repeated points
+(Fashion-MNIST); `expand!` returns the raw k nearest neighbours, duplicates included, as for every
+other method.
 
 The numbers are Julia measurements; parity with the C++ reference implementation is not a goal.
 EOF
@@ -2513,29 +2871,39 @@ git commit -m "bench: run_all pipeline, pinned run.sh wrapper, README benchmark 
 - Consumes: `bench/run.sh` (Task 11).
 - Produces: the committed files the manuscript `\input`s and `\includegraphics`es.
 
-This run takes hours (Fashion-MNIST streaming build and 10,000 queries per method, the nine Exp.3 grid points up to n = 32,000, d = 128). Run it on the machine the manuscript names, with nothing else heavy running.
+This run takes hours (Fashion-MNIST streaming build and 10,000 queries per method, the nine Exp.3 grid points up to n = 32,000, d = 128). Run it on the machine the manuscript names, with nothing else heavy running, from a clean working tree (`git status` shows nothing outside `bench/results*`), and with `BENCH_SMOKE`, `BENCH_ONLY`, `BENCH_FORCE` and `BENCH_RESULTS` unset. The runner is resumable (assumption A23): the order is Exp.2, Exp.3, Exp.1, Exp.1b, a finished experiment's CSV is kept, and running the same command again skips it.
 
 - [ ] **Step 1: Start the pinned full run in the background**
 
-Run: `bench/run.sh > bench/run.log 2>&1` (in the background; wait for it to exit)
-Expected: exit status 0; the last `[ Info:` line of `bench/run.log` is the Exp.3 configuration n = 32000, d = 128, and no `Error` line appears.
+Run: `bench/run.sh >> bench/run.log 2>&1` (in the background; wait for it to exit)
+Expected: exit status 0 and no `Error` line in `bench/run.log`. The log shows one `running exp2`, `running exp3`, `running exp1`, `running exp1b` line each (or `... exists, skipped` for an experiment finished by an earlier invocation), and `bench/results/` holds the four CSV files, `env.txt`, `tex/` and `fig/`. If the run dies, read the error, fix the cause, and run the same command again: the experiments whose CSV exists are skipped. To redo one experiment, use `BENCH_ONLY=exp3 BENCH_FORCE=1 bench/run.sh >> bench/run.log 2>&1`. Tables and figures appear only once all four CSVs exist.
 
-- [ ] **Step 2: Check the run against the protocol and the exactness contract**
+- [ ] **Step 2: Check the run against the protocol, the sizes and the exactness contract**
 
 Run:
 
 ```bash
-grep -E '^(threads|blas_threads|cpus_allowed|governor)=' bench/results/env.txt
+export PATH="$HOME/.juliaup/bin:$PATH"
+grep -E '^(threads|blas_threads|cpus_allowed|governor|smoke|dirty|kernel|pkg_versions)=' bench/results/env.txt
 julia -t 1 --project=bench -e 'using CSV, DataFrames
-for f in ("exp1.csv", "exp1b.csv")
-    df = CSV.read(joinpath("bench/results", f), DataFrame)
+res = "bench/results"
+env = Dict(String(a) => String(b) for (a, b) in (split(l, "="; limit = 2) for l in eachline(joinpath(res, "env.txt"))))
+env["smoke"] == "false" || error("env.txt says smoke=$(env["smoke"]): these are smoke numbers")
+e1, e1b, e2, e3 = (CSV.read(joinpath(res, f), DataFrame) for f in ("exp1.csv", "exp1b.csv", "exp2.csv", "exp3.csv"))
+all(e1.n .== 9000) && all(e1.nq .== 1000) || error("exp1.csv is not the full random-xs run")
+all(e1b.n .== 60000) && all(e1b.nq .== 10000) || error("exp1b.csv is not the full Fashion-MNIST run")
+nrow(e2) == 2 * 7 * 4 || error("exp2.csv has $(nrow(e2)) rows, expected 56")
+nrow(unique(e3[:, [:n, :d]])) == 9 || error("exp3.csv does not cover the nine grid points")
+println("sizes ok: exp1 n=", e1.n[1], " nq=", e1.nq[1], "; exp1b n=", e1b.n[1], " nq=", e1b.nq[1], "; exp2 rows=", nrow(e2), "; exp3 grid points=9")
+for (f, df) in (("exp1.csv", e1), ("exp1b.csv", e1b))
     h = df[startswith.(df.method, "hNNG") .| (df.method .== "brute-BLAS"), :]
     println(f, " exact rows recall_ann = ", unique(h.recall_ann))
 end'
+grep -o 'min_match=[0-9.e-]*' bench/run.log | sort | uniq -c
 ls bench/results/tex bench/results/fig
 ```
 
-Expected: `threads=1`, `blas_threads=1`, `cpus_allowed=2`, the governor line; `exp1.csv exact rows recall_ann = [1.0]` and `exp1b.csv exact rows recall_ann = [1.0]`; the four `.tex` files and the four `.pdf` files. Any other recall for an exact row is a bug: stop and report it.
+Expected: `smoke=false`, `threads=1`, `blas_threads=1`, `cpus_allowed=2`, the governor, `dirty=false`, the kernel and the `pkg_versions` lines; `sizes ok: exp1 n=9000 nq=1000; exp1b n=60000 nq=10000; exp2 rows=56; exp3 grid points=9`; `exp1.csv exact rows recall_ann = [1.0]` and `exp1b.csv exact rows recall_ann = [1.0]`; the `min_match` summary is a single line `<count> min_match=1.0` (the minimum over all queries of the per-query distance-multiset match, A25; any other value means an exact method returned a wrong neighbour that the recall rule missed); the four `.tex` files and the four `.pdf` files. Any other recall or `min_match` for an exact row is a bug: stop and report it. `dirty=true` means the results do not correspond to the recorded commit: commit or discard the pending changes and rerun with `BENCH_FORCE=1`.
 
 - [ ] **Step 3: Commit the results**
 

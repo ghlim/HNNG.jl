@@ -81,9 +81,9 @@ HNNG.jl/
 ├── ext/HNNGGraphsExt.jl    package extension on Graphs.jl
 ├── test/
 │   ├── runtests.jl, oracle.jl, invariants.jl, order.jl, updates.jl,
-│   │   objects.jl, navigate.jl, io.jl, parity_cpp.jl, recall_rule.jl
+│   │   objects.jl, navigate.jl, io.jl, parity_cpp.jl
 │   └── fixtures/           C++ parity fixtures (generated once, committed)
-├── bench/                  own Project.toml (see §11)
+├── bench/                  own Project.toml, own tests in bench/test/ (see §11)
 └── docs/superpowers/specs/ this file
 ```
 
@@ -496,21 +496,24 @@ seeds.
   reproduced from stored distances alone (eval counter unchanged).
 - **IO** (`io.jl`): save/load round-trip reproduces `verify`-clean structure
   and identical `knn` results for both stores.
-- **Recall rule** (`recall_rule.jl`): the harness's two recall definitions on
-  a hand-made tie case.
+- **Recall rule** (`bench/test/runtests.jl`, run in the bench environment): the
+  harness's two recall definitions on a hand-made tie case; the rule is tested
+  there, next to `bench/src/recall.jl`, not in the package's `test/`.
 - **Errors**: every case in §9.
 
 ## 11. Benchmark harness (`bench/`)
 
 Own `Project.toml`: `HNNG` (dev path), `NearestNeighbors`, `HNSW`, `HDF5`,
-`BenchmarkTools`, `StableRNGs`, `CSV`, `DataFrames`, `CairoMakie`,
+`StableRNGs`, `CSV`, `DataFrames`, `CairoMakie`,
 `SimilaritySearch` (optional, ExhaustiveSearch and SearchGraph).
 
 Protocol for every experiment: `julia -t 1`, `BLAS.set_num_threads(1)`,
-process pinned with `taskset`, one query at a time, the best of three
-timed passes, `k = 10`. Two recall definitions are reported: the
-ann-benchmarks rule (a returned distance counts if it is `≤` the true k-th
-distance `+ 1e-3`) and strict id recall. `HNNG.knn_counted` supplies the
+process pinned with `taskset`, one query at a time, `k = 10`. Query
+timing is the best of three timed passes; build time is a single timed
+build after an untimed warm-up build; the Exp.3 table reports the median
+over three runs of the mean per-operation latency. Two recall definitions
+are reported: the ann-benchmarks rule (a returned distance counts if it is
+`≤` the true k-th distance `+ 1e-3`) and strict id recall. `HNNG.knn_counted` supplies the
 fraction evaluated: distance evaluations during the query divided by the
 number of live elements. `env.txt` records Julia version, the
 `Manifest.toml` hash, CPU model, governor, and date.
@@ -551,8 +554,7 @@ number of live elements. `env.txt` records Julia version, the
   incremental, hNNG bulk, brute force, KD-tree, ball tree, HNSW at maximum
   recall and HNSW at its sweet spot as rows; `n (d) & insert/op & delete/op &
   rebuild/op (speedup)` for the third), plus `macros.tex` with one
-  `
-ewcommand` per number quoted in the manuscript prose (the ρ(d) values
+  `\newcommand` per number quoted in the manuscript prose (the ρ(d) values
   at `d = 2, 8, 16, 32`, the rewire counts, the recall–QPS headline).
   The three table files hold only the `tabular` environment; the manuscript
   keeps its own `table` float, caption and label around each `\input`.
