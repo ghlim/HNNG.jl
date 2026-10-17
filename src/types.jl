@@ -225,6 +225,9 @@ verifies or saves the index, runs inside: calls on one index are serialized (cor
 not parallel). The lock is reentrant, so a locked call may call another public
 function. A macro rather than a function taking a closure, so each public method
 compiles to one body (lock, try, finally unlock) with no extra closure specialization.
+The query bodies it calls (`_knn`, `_knn_counted`, `_knn_levelsync`, `_knn_batch`) are
+`@noinline`: inlined into the `try` region, the search loop ran about 2 % slower on
+Julia 1.10.
 """
 macro _locked(idx, expr)
     quote

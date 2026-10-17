@@ -74,7 +74,7 @@ parallel. Use `knn_batch(idx, Q, k; threads=true)` for parallel queries.
 """
 knn(idx::HNNGIndex, q, k::Integer) = @_locked idx _knn(idx, q, k)
 
-function _knn(idx::HNNGIndex, q, k::Integer)
+@noinline function _knn(idx::HNNGIndex, q, k::Integer)
     _check_k(k)
     ids, d = _knn!(idx.memo, idx, _prepare(idx, q), Int(k))
     _flush!(idx)
@@ -90,7 +90,7 @@ like `knn`.
 """
 knn_counted(idx::HNNGIndex, q, k::Integer) = @_locked idx _knn_counted(idx, q, k)
 
-function _knn_counted(idx::HNNGIndex, q, k::Integer)
+@noinline function _knn_counted(idx::HNNGIndex, q, k::Integer)
     _check_k(k)
     # idx.memo.nevals is 0 here after any public call: add!, delete!, bulk_add!, knn,
     # knn_counted and the serial knn_batch all end with _flush!. It is not zeroed: a
@@ -113,7 +113,7 @@ Holds the index lock, like `knn`.
 """
 knn_levelsync(idx::HNNGIndex, q, k::Integer) = @_locked idx _knn_levelsync(idx, q, k)
 
-function _knn_levelsync(idx::HNNGIndex, q, k::Integer)
+@noinline function _knn_levelsync(idx::HNNGIndex, q, k::Integer)
     _check_k(k)
     qp = _prepare(idx, q)
     memo = _begin!(DistMemo(), _ntotal(idx))
@@ -205,7 +205,7 @@ function _wait_all(tasks)
     failed
 end
 
-function _knn_batch(idx::HNNGIndex, Q, k::Integer, threads::Bool)
+@noinline function _knn_batch(idx::HNNGIndex, Q, k::Integer, threads::Bool)
     _check_k(k)
     qs = _queries(idx, Q)
     nq = length(qs)
