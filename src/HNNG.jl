@@ -1,6 +1,7 @@
 module HNNG
 
 using Distances: Distances, PreMetric, Metric, Euclidean, SqEuclidean, CosineDist
+using DataStructures: heappush!, heappop!
 
 export HNNGIndex, UserMetric, Euclidean, SqEuclidean, CosineDist
 export is_metric, nlevels, element, verify, add!

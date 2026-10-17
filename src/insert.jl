@@ -100,8 +100,45 @@ at `q` would improve). Distances of `cands` are in `idx.memo.val`.
 """
 function _nn_search(idx::HNNGIndex, q, l::Int, ex1::Int, ex2::Int,
                     floating::Vector{Int}, record::Bool)
-    nn, nnd, cands = _scan_level(idx, q, l, ex1, ex2)
-    nn, nnd, record ? cands : Int[]
+    memo = _begin!(idx.memo, _ntotal(idx))
+    T = nlevels(idx) - 1
+    nn, nnd = 0, Inf
+    cands = Int[]
+    for (ci, c) in enumerate(idx.levels[T+1].clusters)
+        c.rep == 0 || _push_cluster!(memo, idx, q, T, ci, nnd, l, record)
+    end
+    if l < T
+        lv, up = idx.levels[l+1], idx.levels[l+2]
+        for ci in floating
+            c = lv.clusters[ci]
+            (c.rep == 0 || any(m -> up.present[m], c.members)) && continue
+            _push_cluster!(memo, idx, q, l, ci, nnd, l, record)
+        end
+    end
+    while !isempty(memo.front)
+        lb, L, ci = heappop!(memo.front, FWD)
+        c = idx.levels[L+1].clusters[ci]
+        _skip(idx, lb, nnd, c, l, record) && continue
+        if L == l
+            memo.mark[c.rep] == memo.epoch && continue      # reached twice after a merge
+            for m in c.members
+                memo.mark[m] = memo.epoch
+                (m == ex1 || m == ex2) && continue
+                d = _mdist(memo, idx, q, m)
+                record && push!(cands, m)
+                if _better(d, m, nnd, nn)
+                    nn, nnd = m, d
+                end
+            end
+        else
+            below = idx.levels[L]
+            for m in c.members
+                cj = below.cluster_of[m]
+                cj == 0 || _push_cluster!(memo, idx, q, L - 1, cj, nnd, l, record)
+            end
+        end
+    end
+    nn, nnd, cands
 end
 
 """Distance from representative `r` to member `m`, reused from `m`'s current cluster
@@ -394,4 +431,31 @@ function add!(idx::HNNGIndex{ObjectStore{E}}, objs::AbstractVector{<:E}) where {
         _insert!(idx, o)
     end
     first:_ntotal(idx)
+end
+
+const FWD = Base.Order.Forward
+const REV = Base.Order.Reverse
+
+"""
+    _lb(dr, r, g) -> Float64
+
+Lower bound on the distance from the pass query to every element reachable from a
+cluster whose representative is `dr` away and whose radius is `r`, shrunk by the
+relative guard `g` (always `idx.guard`, spec §5) so that rounding in `dr` and `r`
+never prunes.
+"""
+@inline _lb(dr::Float64, r::Float64, g::Float64) = max(0.0, dr - r - g * (dr + r))
+
+# Skip rule of link!/unlink! (spec §6.3): hopeless for the nearest neighbour and,
+# when recording rewire candidates, hopeless for every rewire under the cluster.
+@inline _skip(idx::HNNGIndex, lb::Float64, nnd::Float64, c::Cluster, l::Int, record::Bool) =
+    idx.is_metric && lb > nnd && (!record || lb > c.maxout[l+1])
+
+@inline function _push_cluster!(memo::DistMemo, idx::HNNGIndex, q, L::Int, ci::Int,
+                                nnd::Float64, l::Int, record::Bool)
+    c = idx.levels[L+1].clusters[ci]
+    dr = _mdist(memo, idx, q, c.rep)
+    lb = idx.is_metric ? _lb(dr, c.radius, idx.guard) : 0.0
+    _skip(idx, lb, nnd, c, l, record) || heappush!(memo.front, (lb, L, ci), FWD)
+    nothing
 end

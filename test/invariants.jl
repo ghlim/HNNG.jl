@@ -292,3 +292,35 @@ end
     HNNG._compose!(rm, ad, ([7, 9], [5, 11]))
     @test sort(rm) == [9] && sort(ad) == [11]
 end
+
+@testset "descent: same neighbour and a superset of the rewire candidates" begin
+    rng = StableRNG(7)
+    for (T, d, gen) in ((Float64, 2, gauss), (Float32, 4, blobs), (Float64, 16, gauss))
+        idx = HNNGIndex(Euclidean(), d; T=T)
+        add!(idx, gen(rng, T, d, 400))
+        @test verify(idx)
+        Q = gen(rng, T, d, 30)
+        for j in axes(Q, 2), l in 0:nlevels(idx)-1
+            q = HNNG._prepare(idx, view(Q, :, j))
+            nn, nnd, cands = HNNG._nn_search(idx, q, l, 0, 0, Int[], true)
+            snn, snnd, scands = HNNG._scan_level(idx, q, l, 0, 0)
+            @test (nn, nnd) == (snn, snnd)
+            lv = idx.levels[l+1]
+            need = [x for x in scands if HNNG._euclid(q, HNNG._point(idx.store, x)) < lv.outdist[x]]
+            @test issubset(need, cands)
+            nn2, nnd2, _ = HNNG._nn_search(idx, q, l, snn, 0, Int[], false)
+            s2 = HNNG._scan_level(idx, q, l, snn, 0)
+            @test (nn2, nnd2) == (s2[1], s2[2])
+        end
+    end
+end
+
+@testset "descent: pruning evaluates far fewer elements than a scan" begin
+    rng = StableRNG(77)
+    idx = HNNGIndex(Euclidean(), 2; T=Float64)
+    add!(idx, blobs(rng, Float64, 2, 2000; nc=20))
+    @test verify(idx)
+    q = HNNG._prepare(idx, [0.1, -0.2])
+    _, _, cands = HNNG._nn_search(idx, q, 0, 0, 0, Int[], true)
+    @test length(cands) < 1000
+end
