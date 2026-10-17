@@ -53,4 +53,5 @@ include(joinpath(@__DIR__, "setup.jl"))
     end
     include("test_timing.jl")
     include("test_baselines.jl")
+    include("test_baselines_approx.jl")
 end

@@ -133,3 +133,93 @@ function query(h::TreeHandle, q::AbstractVector{Float32}, k::Int)
     ids, ds = NN.knn(h.tree, q, min(k, h.n))
     return canonical(ids, ds)
 end
+
+export HNSWjl, HNSWHandle, build_hnsw, set_ef!, hnsw_insert!,
+       SSSearchGraph, SSExhaustive, SSHandle, optional_methods
+
+# ---- HNSW.jl ------------------------------------------------------------------------
+"HNSW.jl with the spec's build parameters; `ef` is the search beam (`set_ef!` changes it)."
+Base.@kwdef struct HNSWjl <: BenchMethod
+    M::Int = 16
+    efConstruction::Int = 200
+    ef::Int = 10
+end
+method_name(::HNSWjl) = "HNSW"
+struct HNSWHandle{G}
+    g::G
+end
+
+"""
+    build_hnsw(m, P; nbuild = size(P, 2)) -> HNSWHandle
+
+Hands every column of P to HNSW.jl (so later inserts need no resize) and links columns
+1:nbuild into the graph. Seeds the global RNG first: HNSW.jl draws levels from it.
+"""
+function build_hnsw(m::HNSWjl, P::Matrix{Float32}; nbuild::Int = size(P, 2))
+    Random.seed!(SEED_HNSW)
+    data = [P[:, i] for i in 1:size(P, 2)]
+    g = HNSW.HierarchicalNSW(data; metric = Euclidean(), M = m.M,
+                             efConstruction = m.efConstruction, ef = m.ef)
+    HNSW.add_to_graph!(g, 1:nbuild)
+    return HNSWHandle(g)
+end
+build(m::HNSWjl, X::Matrix{Float32}) = build_hnsw(m, X)
+set_ef!(h::HNSWHandle, ef::Int) = HNSW.set_ef!(h.g, ef)
+
+"HNSW.jl's online insert: link column i (already in the data vector) into the graph."
+hnsw_insert!(h::HNSWHandle, i::Int) = HNSW.add_to_graph!(h.g, [i])
+
+function query(h::HNSWHandle, q::AbstractVector{Float32}, k::Int)
+    ids, ds = HNSW.knn_search(h.g, convert(Vector{Float32}, q), k)
+    return canonical(ids, ds)
+end
+
+# ---- SimilaritySearch.jl (optional) -----------------------------------------------------
+struct SSSearchGraph <: BenchMethod end
+struct SSExhaustive <: BenchMethod end
+method_name(::SSSearchGraph) = "SS-SearchGraph"
+method_name(::SSExhaustive) = "SS-Exhaustive"
+struct SSHandle{I,C}
+    index::I
+    ctx::C
+end
+
+"The SimilaritySearch methods, or none when the package did not load."
+optional_methods() = HAS_SS ? BenchMethod[SSSearchGraph(), SSExhaustive()] : BenchMethod[]
+
+# Calls checked against the installed SimilaritySearch 1.6.7: positional constructors
+# `SearchGraph(dist, db)` and `ExhaustiveSearch(dist, db)`, SimilaritySearch's own metric
+# `Dist.L2()` (Euclidean, not squared, like every other method), and one query at a time
+# through `search(index, ctx, q, knnqueue(ctx, k))`, read with `IdDistView`. The default
+# SearchGraphContext auto-tunes the beam (OptimizeParameters(MinRecall(0.97))) during index!.
+# `neardup = 0f0` folds exact duplicate points into cluster members and a query then returns one
+# representative per duplicate group, which under-counts recall on data with repeated points
+# (Fashion-MNIST); `expand!(G, ctx, q, res)` after each search gives back the raw k nearest,
+# members included. Since 1.6.6 expand! takes the build context: with it, members of a graph
+# folded at distance zero take their representative's distance instead of being re-evaluated.
+function build(::SSSearchGraph, X::Matrix{Float32})
+    Random.seed!(SEED_SS)             # RandomHints and the parameter optimiser draw from the global RNG
+    SS = SimilaritySearch
+    g = SS.SearchGraph(SS.Dist.L2(), SS.MatrixDatabase(X))
+    ctx = SS.SearchGraphContext(; neighborhood = SS.Neighborhood(; neardup = 0f0))
+    SS.index!(g, ctx)
+    return SSHandle(g, ctx)
+end
+function build(::SSExhaustive, X::Matrix{Float32})
+    SS = SimilaritySearch             # no randomness: index! is a no-op, search scans every column
+    return SSHandle(SS.ExhaustiveSearch(SS.Dist.L2(), SS.MatrixDatabase(X)), SS.GenericContext())
+end
+function query(h::SSHandle, q::AbstractVector{Float32}, k::Int)
+    SS = SimilaritySearch
+    qv = convert(Vector{Float32}, q)
+    res = SS.knnqueue(h.ctx, k)
+    SS.search(h.index, h.ctx, qv, res)
+    h.index isa SS.SearchGraph && SS.expand!(h.index, h.ctx, qv, res)   # raw neighbours, duplicates included
+    ids = Int[]
+    ds = Float64[]
+    for p in SS.IdDistView(res)            # only filled slots are visited: no padding convention to decode
+        push!(ids, Int(p.id))
+        push!(ds, Float64(p.dist))
+    end
+    return canonical(ids, ds)
+end
