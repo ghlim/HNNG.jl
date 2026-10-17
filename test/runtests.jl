@@ -12,4 +12,7 @@ using Test, HNNG
     include("io.jl")
     include("parity_cpp.jl")
     include("errors.jl")
+    if get(ENV, "HNNG_SLOW", "0") == "1"
+        include("slow.jl")
+    end
 end
