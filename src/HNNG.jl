@@ -1,0 +1,3 @@
+module HNNG
+
+end # module
