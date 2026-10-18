@@ -23,7 +23,7 @@ function run_exp2(; smoke::Bool = is_smoke(), outdir::AbstractString = results_d
         qs = columns(Q)
         for m in BenchMethod[HNNGBulk(), KDTreeNN(), BallTreeNN(), BruteBLAS()]
             h, bt = build_time(m, X)
-            results, seconds = time_queries(q -> query(h, q, EXP2_K), qs)
+            results, seconds = timed_queries(h, qs, EXP2_K)
             ra, _ = mean_recalls(X, Q, nb, gd, results, EXP2_K)
             ra == 1.0 || error("Exp.2: $(method_name(m)) is not exact on $geometry d=$d (recall $ra)")
             # at low d the additive recall rule cannot see a (k+1)-th-neighbour answer; compare the distances (A25)

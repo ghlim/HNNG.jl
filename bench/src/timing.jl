@@ -1,5 +1,5 @@
 # Timing protocol (spec §11) and the env.txt record.
-export check_protocol, best_of, time_queries, write_env
+export check_protocol, best_of, time_queries, timed_queries, write_env
 
 """
     check_protocol()
@@ -42,6 +42,15 @@ function time_queries(f, qs::AbstractVector; passes::Int = 3)
         [f(q) for q in qs]
     end
 end
+
+"""
+    timed_queries(h, qs, k) -> (results, seconds)
+
+`time_queries(q -> query(h, q, k), qs)` behind a function barrier: the experiments hold the
+handle as a non-inferred value (build_time over `m::BenchMethod`), so a closure built at the
+call site would dispatch `query` dynamically on every query; here `h` has its concrete type.
+"""
+timed_queries(h, qs::AbstractVector, k::Int) = time_queries(q -> query(h, q, k), qs)
 
 "Value after the first ':' on the first line of `path` that starts with `prefix`."
 function first_line_value(path::AbstractString, prefix::AbstractString)

@@ -28,6 +28,9 @@ include(joinpath(@__DIR__, "setup.jl"))
         cid, cds = canonical(ids, Float32[0.5, 1.0, 1.0])                  # already sorted: no reordering,
         @test cid === ids && cds == [0.5, 1.0, 1.0] && cds isa Vector{Float64}   # ids passed through, dists widened
         @test canonical(Int[], Float64[]) == (Int[], Float64[])
+        # concretely inferred (no boxed captured variable): the tree and HNSW query paths call it per query
+        @test only(Base.return_types(canonical, (Vector{Int}, Vector{Float32}))) == Tuple{Vector{Int},Vector{Float64}}
+        @test only(Base.return_types(canonical, (Vector{Int32}, Vector{Float32}))) == Tuple{Vector{Int},Vector{Float64}}
     end
 
     @testset "tree results arrive sorted: canonical has nothing to sort" begin

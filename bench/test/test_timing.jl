@@ -62,6 +62,19 @@ end
         @test best >= 0
     end
 
+    @testset "timed_queries: function barrier, so query(h, q, k) dispatches statically" begin
+        X, Q = synthetic("gaussian", 200, 10, 4)
+        qs = columns(Q)
+        hs = Any[build(BruteBLAS(), X), build(KDTreeNN(), X)]   # Any, as build_time's handle is in exp1/exp2
+        for h in hs
+            results, best = timed_queries(h, qs, 5)
+            @test results == [query(h, q, 5) for q in qs] && best > 0
+            # inside the barrier the results vector is concretely typed (a dynamic closure gives Vector{Any})
+            rt = only(Base.return_types(timed_queries, (typeof(h), typeof(qs), Int)))
+            @test rt <: Tuple{Union{Nothing,Vector{Tuple{Vector{Int},Vector{Float64}}}},Float64}
+        end
+    end
+
     @testset "env.txt records the run environment" begin
         check_protocol()
         mktempdir() do dir

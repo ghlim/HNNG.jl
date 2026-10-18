@@ -27,7 +27,7 @@ function bench_dataset(ds::Dataset; k::Int = EXP1_K, efs = EXP1_EFS)
     end
     for m in BenchMethod[HNNGIncremental(), HNNGBulk(), BruteBLAS(), KDTreeNN(), BallTreeNN()]
         h, bt = build_time(m, ds.train)
-        results, seconds = time_queries(q -> query(h, q, k), qs)
+        results, seconds = timed_queries(h, qs, k)
         mm = min_match(ds, results, k)         # exactness beyond the additive recall rule (A25)
         @info "Exp.1 exactness dataset=$(ds.name) method=$(method_name(m)) min_match=$mm"
         mm == 1.0 || error("Exp.1: $(method_name(m)) is not exact on $(ds.name) (min_match $mm)")
@@ -44,14 +44,14 @@ function bench_dataset(ds::Dataset; k::Int = EXP1_K, efs = EXP1_EFS)
         hh, hbt = build_time(HNSWjl(), ds.train)
         for ef in efs
             set_ef!(hh, ef)
-            results, seconds = time_queries(q -> query(hh, q, k), qs)
+            results, seconds = timed_queries(hh, qs, k)
             row!("HNSW", "ef=$ef", hbt, results, seconds)
         end
     end
     for m in optional_methods()
         try
             hs, sbt = build_time(m, ds.train)
-            results, seconds = time_queries(q -> query(hs, q, k), qs)
+            results, seconds = timed_queries(hs, qs, k)
             row!(method_name(m), "", sbt, results, seconds)
         catch err
             @warn "$(method_name(m)) row skipped on $(ds.name)" exception = err

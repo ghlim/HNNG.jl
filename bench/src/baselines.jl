@@ -28,11 +28,11 @@ runs only when `is_canonical` fails, e.g. on ties, so the common timed query pat
 charged for it.
 """
 function canonical(ids::AbstractVector, dists::AbstractVector)
-    if !is_canonical(ids, dists)
-        p = sort(collect(eachindex(ids)); by = j -> (dists[j], ids[j]))
-        ids, dists = ids[p], dists[p]
-    end
-    return convert(Vector{Int}, ids), convert(Vector{Float64}, dists)
+    is_canonical(ids, dists) && return convert(Vector{Int}, ids), convert(Vector{Float64}, dists)
+    # no rebinding of ids/dists here: the `by` closure captures them, and a reassigned captured
+    # variable is boxed, which made the return type (and every caller's query) infer as Any
+    p = sort(collect(eachindex(ids)); by = j -> (dists[j], ids[j]))
+    return convert(Vector{Int}, ids[p]), convert(Vector{Float64}, dists[p])
 end
 
 """
