@@ -189,7 +189,11 @@ longest). An experiment whose CSV already exists is skipped, so after a crash th
 continues where it stopped; `BENCH_FORCE=1` reruns everything and `BENCH_ONLY=exp3` (one of `exp1`,
 `exp1b`, `exp2`, `exp3`) restricts the run to one experiment (combine with `BENCH_FORCE=1` to rerun a
 finished one). Tables and figures are written only when all four CSV files exist. Smoke runs always
-rerun everything.
+rerun everything. `env.txt` describes the run's first invocation; each resumed invocation writes
+`env-resume-<time>.txt` and every experiment logs its start and end time in `runs.txt`, and a resume
+from a different commit than `env.txt`'s is refused unless `BENCH_FORCE=1`. `run.sh` runs
+`julia +1.13.2`, the version the bench Manifest was resolved on (install the channel once with
+`juliaup add 1.13.2`).
 
 `BENCH_CPU` picks the core (default 2), `BENCH_DATA` the directory with the ann-benchmarks
 HDF5 files (default `/home/coral/working/benchmarks/data`), `BENCH_RESULTS` the output
@@ -201,7 +205,7 @@ directory. One step at a time: `julia -t 1 --project=bench bench/exp1.jl` (likew
 | `exp1.csv`, `exp1b.csv` | random-xs-20 and fashion-mnist-784: build time, QPS, both recalls, fraction evaluated, hNNG levels and cluster counts, one HNSW row per `ef` |
 | `exp2.csv` | Gaussian (n = 5,000) and 100 blobs (n = 10,000), d = 2 to 128: ρ, QPS, build time, levels |
 | `exp3.csv` | Gaussian grid n ∈ {8,000, 16,000, 32,000} × d ∈ {16, 64, 128}, every insert and delete: latency, distance evaluations, level-0 rewires, highest level touched; streaming and bulk rebuilds and the baselines |
-| `env.txt` | Julia version, Manifest hash, CPU model, governor, allowed CPUs, threads, commit and `dirty` flag, `smoke` flag, seeds, package versions, kernel, date |
+| `env.txt` | Julia version, Manifest hash, CPU model, governor, allowed CPUs and their hyperthread siblings, `no_turbo`, EPP, threads, BLAS configuration, commit and `dirty` flag, `smoke` flag, seeds, package versions, kernel, date |
 | `tex/` | `tab_annbench.tex`, `tab_fashion.tex`, `tab_ops.tex` (tabular bodies) and `macros.tex` |
 | `fig/` | `recall_qps.pdf`, `dist_eval_vs_dim.pdf`, `qps_vs_dim.pdf`, `ops_comparison.pdf` |
 
@@ -214,7 +218,7 @@ directory. One step at a time: `julia -t 1 --project=bench bench/exp1.jl` (likew
 | Recall | ann-benchmarks rule (returned distance ≤ true k-th distance + 1e-3) and strict id recall, distances recomputed in Float64 from the returned ids |
 | Fraction evaluated ρ | distance evaluations per query (`HNNG.knn_counted`) divided by live elements |
 | Exp.3 | 200 inserts, then 200 deletes of random live ids; median over 3 runs of the mean latency per operation (a `GC.gc(false)` before each timed operation, outside the timing); 20 queries checked against brute force after every operation |
-| Baselines | brute force (BLAS gemv, exact Float64 re-rank), KD-tree and ball tree (NearestNeighbors.jl, leaf size 25), HNSW.jl (M = 16, efConstruction = 200, ef from 10 to 640), SimilaritySearch.jl when it loads |
+| Baselines | brute force (BLAS gemv on an n×d copy of the data for d ≤ 128 and on the d×n data above, exact Float64 re-rank), KD-tree and ball tree (NearestNeighbors.jl, leaf size 25), HNSW.jl (M = 16, efConstruction = 200, ef from 10 to 640), SimilaritySearch.jl when it loads |
 | Exactness | the exact methods (hNNG, brute force, KD-tree, ball tree) must return the true k nearest distances (relative tolerance 1e-5) for every query of Exp.1, Exp.1b and Exp.2; the run fails otherwise |
 
 SimilaritySearch.jl method notes: its rows use `Dist.L2()` (Euclidean, like every other method) and

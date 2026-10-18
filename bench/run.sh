@@ -9,6 +9,7 @@
 #   BENCH_FORCE=1             rerun experiments even if their CSV exists
 #   BENCH_ONLY=exp3           run only one of exp1, exp1b, exp2, exp3
 # Tables and figures are written only when all four CSV files exist.
+# Julia is pinned to 1.13.2, the version bench/Manifest.toml was resolved on (once: juliaup add 1.13.2).
 set -euo pipefail
 export PATH="$HOME/.juliaup/bin:$PATH"     # juliaup's PATH entry lives in the login profile
 case "${BENCH_ONLY:-}" in
@@ -17,5 +18,5 @@ case "${BENCH_ONLY:-}" in
 esac
 cd "$(dirname "$0")/.."
 command -v taskset >/dev/null || { echo "run.sh: taskset not found (util-linux)" >&2; exit 1; }
-julia --project=bench -e 'using Pkg; Pkg.instantiate()'
-exec taskset -c "${BENCH_CPU:-2}" julia -t 1 --project=bench bench/run_all.jl
+julia +1.13.2 --project=bench -e 'using Pkg; Pkg.instantiate()'
+exec taskset -c "${BENCH_CPU:-2}" julia +1.13.2 -t 1 --project=bench bench/run_all.jl
