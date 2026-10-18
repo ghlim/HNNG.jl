@@ -32,6 +32,7 @@ const OPS_LINES = [
 # Final print sizes in pt: with `pt_per_unit = 1` one Makie unit is one PDF point, so the text
 # is 8 pt on the page. sn-jnl `iicol`: column 215 pt (76 mm), double column 453 pt (160 mm).
 const FIG_SINGLE = (215, 165)    # one column
+const FIG_RECALL = (215, 197)    # recall_qps: one column, legend below the axis
 const FIG_DOUBLE = (450, 150)    # ops_comparison: figure* across both columns
 const FIG_FONT = 8
 const FIG_PAD = 4                # figure padding (pt); the Makie default of 16 wastes a print column
@@ -49,25 +50,75 @@ end
 "Ticks at the dimensions `ds`, optionally only every `step`-th one (a half-column panel fits four labels)."
 dim_ticks(ds; step::Int = 1) = (ds[1:step:end], string.(ds[1:step:end]))
 
-"Recall vs QPS on random-xs: HNSW traces a frontier, exact methods are points at recall 1."
-function plot_recall_qps(exp1::AbstractDataFrame, path::AbstractString)
-    fig = Figure(size = FIG_SINGLE, fontsize = FIG_FONT, figure_padding = FIG_PAD)
-    ax = Axis(fig[1, 1]; xlabel = "recall (ann-benchmarks rule, k = 10)", ylabel = "queries per second",
-              yscale = log10)
-    for m in METHOD_ORDER
-        r = sort(exp1[exp1.method .== m, :], :recall_ann)
-        nrow(r) == 0 && continue
-        st = METHOD_STYLE[m]
-        x, y = Float64.(r.recall_ann), Float64.(r.qps)
-        if nrow(r) > 1
-            scatterlines!(ax, x, y; color = st.color, marker = st.marker, markersize = MS, linewidth = LW, label = st.label)
-        else
-            scatter!(ax, x, y; color = st.color, marker = st.marker, markersize = MS + 2, label = st.label)
-        end
+# recall_qps only: the exact methods are horizontal lines at their QPS (they all sit at recall 1,
+# where markers hid each other), one line style each; HNSW is the ef frontier. SimilaritySearch
+# rows stay in the CSV but are not drawn (the manuscript does not introduce the package).
+const RECALL_EXACT = ["hNNG-incremental", "hNNG-bulk", "brute-BLAS", "KD-tree", "ball-tree"]
+const RECALL_LINESTYLE = Dict("hNNG-incremental" => :solid, "hNNG-bulk" => :dash, "brute-BLAS" => :dot,
+                              "KD-tree" => :dashdot, "ball-tree" => :dashdotdot)
+const RECALL_LABEL = Dict("hNNG-incremental" => "hNNG (incremental)", "hNNG-bulk" => "hNNG (bulk)",
+                          "brute-BLAS" => "brute force", "KD-tree" => "KD-tree", "ball-tree" => "ball tree",
+                          "HNSW" => "HNSW (ef sweep)")
+
+"QPS tick label: 300 -> \"300\", 3000 -> \"3k\", 100000 -> \"100k\", 3e6 -> \"3M\"."
+qps_label(v::Real) = v < 1e3 ? string(round(Int, v)) :
+                     v < 1e6 ? "$(round(Int, v / 1e3))k" : "$(round(Int, v / 1e6))M"
+
+"""
+    qps_axis(lo, hi) -> (limits, (values, labels))
+
+Log y axis for QPS data in [lo, hi]: limits pad the data by a factor 1.25 each side, ticks are
+the 1-3-10 steps inside the limits, labelled like "3k", "10k", "30k", "100k" (no fractional
+exponents). When fewer than two steps fall inside, the limits widen to the nearest steps
+strictly below lo and above hi, so the ticks always span the data.
+"""
+function qps_axis(lo::Real, hi::Real)
+    0 < lo <= hi || throw(ArgumentError("qps_axis needs 0 < lo <= hi, got $lo, $hi"))
+    steps = [m * 10.0^e for e in floor(Int, log10(lo)) - 2:ceil(Int, log10(hi)) + 1 for m in (1, 3)]
+    limits = (lo / 1.25, hi * 1.25)
+    vals = filter(v -> limits[1] <= v <= limits[2], steps)
+    if length(vals) < 2
+        limits = (steps[findlast(<(lo), steps)], steps[findfirst(>(hi), steps)])
+        vals = filter(v -> limits[1] <= v <= limits[2], steps)
     end
-    axislegend(ax; position = :lb, LEGEND_STYLE...)
-    return save_pdf(fig, path)
+    return limits, (vals, qps_label.(vals))
 end
+
+"""
+    recall_qps_figure(exp1) -> (fig, ax)
+
+Recall vs QPS: HNSW traces its ef frontier; each exact method is a horizontal line at its QPS
+(its recall is 1). Legend below the axis, explicit 1-3-10 QPS ticks (`qps_axis`).
+"""
+function recall_qps_figure(exp1::AbstractDataFrame)
+    fig = Figure(size = FIG_RECALL, fontsize = FIG_FONT, figure_padding = FIG_PAD)
+    shown = exp1[in.(exp1.method, Ref(vcat(RECALL_EXACT, "HNSW"))), :]
+    nrow(shown) == 0 && error("exp1 has no hNNG, baseline or HNSW rows to plot")
+    qps = Float64.(shown.qps)
+    ylim, yticks = qps_axis(minimum(qps), maximum(qps))
+    ax = Axis(fig[1, 1]; xlabel = "recall (ann-benchmarks rule, k = 10)", ylabel = "queries per second",
+              yscale = log10, yticks = yticks, limits = (nothing, ylim))
+    for m in RECALL_EXACT
+        r = shown[shown.method .== m, :]
+        nrow(r) == 0 && continue
+        hlines!(ax, Float64.(r.qps); color = METHOD_STYLE[m].color, linestyle = RECALL_LINESTYLE[m],
+                linewidth = LW, label = RECALL_LABEL[m])
+    end
+    r = sort(shown[shown.method .== "HNSW", :], :recall_ann)
+    if nrow(r) > 0
+        st = METHOD_STYLE["HNSW"]
+        scatterlines!(ax, Float64.(r.recall_ann), Float64.(r.qps); color = st.color, marker = st.marker,
+                      markersize = MS, linewidth = LW, label = RECALL_LABEL["HNSW"])
+    else
+        xlims!(ax, 0.95, 1.005)          # horizontal lines alone set no x range
+    end
+    Legend(fig[2, 1], ax; orientation = :horizontal, nbanks = 3, LEGEND_STYLE...)
+    rowgap!(fig.layout, 1, 4)
+    return fig, ax
+end
+
+"Recall vs QPS on random-xs (see `recall_qps_figure`), saved as a PDF of size FIG_RECALL."
+plot_recall_qps(exp1::AbstractDataFrame, path::AbstractString) = save_pdf(first(recall_qps_figure(exp1)), path)
 
 "ρ(d): fraction of points hNNG evaluates per query, both Exp.2 geometries."
 function plot_dist_eval(exp2::AbstractDataFrame, path::AbstractString)
@@ -80,21 +131,21 @@ function plot_dist_eval(exp2::AbstractDataFrame, path::AbstractString)
         nrow(r) == 0 && continue
         st = GEOMETRY_STYLE[g]
         scatterlines!(ax, Int.(r.d), Float64.(r.frac_evaluated); color = st.color, marker = st.marker,
-                      markersize = MS, linewidth = LW, label = "$(st.label), n = $(r.n[1])")
+                      markersize = MS, linewidth = LW, label = "$(st.label), n = $(n_label(r.n[1]))")
     end
     axislegend(ax; position = :rb, LEGEND_STYLE...)
     return save_pdf(fig, path)
 end
 
-"QPS vs d for the exact methods; one panel per geometry (half a column each), shared legend below."
-function plot_qps_dim(exp2::AbstractDataFrame, path::AbstractString)
+"QPS vs d for the exact methods; one panel per geometry (half a column each), shared legend below. Returns (fig, panels)."
+function qps_dim_figure(exp2::AbstractDataFrame)
     ds = sort(unique(Int.(exp2.d)))
     fig = Figure(size = FIG_SINGLE, fontsize = FIG_FONT, figure_padding = FIG_PAD)
     panels = Axis[]
     for g in ("gaussian", "blobs")
         sub = exp2[exp2.geometry .== g, :]
         nrow(sub) == 0 && continue
-        ax = Axis(fig[1, length(panels) + 1]; title = "$(GEOMETRY_STYLE[g].label), n = $(sub.n[1])",
+        ax = Axis(fig[1, length(panels) + 1]; title = "$(GEOMETRY_STYLE[g].label), n = $(n_label(sub.n[1]))",
                   xlabel = "dimension d", ylabel = isempty(panels) ? "queries per second" : "",
                   xscale = log2, yscale = log10, xticks = dim_ticks(ds; step = 2))
         push!(panels, ax)
@@ -110,8 +161,9 @@ function plot_qps_dim(exp2::AbstractDataFrame, path::AbstractString)
     length(panels) > 1 && linkyaxes!(panels...)
     Legend(fig[2, 1:length(panels)], panels[1]; orientation = :horizontal, nbanks = 2, LEGEND_STYLE...)
     rowgap!(fig.layout, 1, 4)
-    return save_pdf(fig, path)
+    return fig, panels
 end
+plot_qps_dim(exp2::AbstractDataFrame, path::AbstractString) = save_pdf(first(qps_dim_figure(exp2)), path)
 
 "Tick label for an index size: 8000 -> \"8k\", 300 -> \"300\"."
 n_label(n::Integer) = n % 1000 == 0 ? "$(n ÷ 1000)k" : string(n)
