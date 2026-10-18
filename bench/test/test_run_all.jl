@@ -64,7 +64,7 @@ end
             @test count(l -> startswith(l, row), ops) == 1
         end
         annbench = read(joinpath(out, "tex", "tab_annbench.tex"), String)
-        @test occursin("hNNG (incremental build) & 1.000 & ", annbench)
+        @test occursin("hNNG (incremental build) & 1.0000 & ", annbench)
         @test occursin("HNSW (sweet spot) & ", annbench) == HAS_HNSW
         macros = read(joinpath(out, "tex", "macros.tex"), String)
         @test occursin("\\newcommand{\\rhoDtwo}{", macros) && occursin("\\newcommand{\\rhoDsixteen}{n/a}", macros)

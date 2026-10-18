@@ -1,5 +1,5 @@
 include(joinpath(@__DIR__, "setup.jl"))
-using DataFrames
+using DataFrames, CSV
 isdefined(Main, :write_tables) || include(joinpath(BENCH_DIR, "tables.jl"))
 
 bs(s) = s * "\\\\"   # append the LaTeX row end \\ (a raw string cannot end in a backslash)
@@ -38,6 +38,27 @@ bs(s) = s * "\\\\"   # append the LaTeX row end \\ (a raw string cannot end in a
             bs("HNSW (sweet spot) & 0.995 & 60{,}000 & 1.23"),
             raw"\hline", raw"\end{tabular}"], "\n") * "\n"
         @test method_table_tex(df; recall_digits = 3) == expected
+    end
+
+    @testset "recall digits: tab_annbench 4 (1,000 queries: granularity 1e-4), tab_fashion 5" begin
+        @test RECALL_DIGITS_ANNBENCH == 4 && RECALL_DIGITS_FASHION == 5
+        df = DataFrame(method = ["hNNG-bulk", "HNSW", "HNSW"], recall_ann = [1.0, 0.9996, 0.9986],
+                       qps = [10.0, 500.0, 900.0], build_s = [0.5, 1.0, 1.0])
+        tex = method_table_tex(df; recall_digits = RECALL_DIGITS_ANNBENCH)
+        @test occursin(bs("hNNG (bulk build) & 1.0000 & 10.0 & 0.500"), tex)
+        @test occursin(bs("HNSW (max recall attained) & 0.9996 & 500 & 1.00"), tex)   # 3 digits printed 1.000
+        mktempdir() do dir
+            exp1 = DataFrame(method = ["hNNG-incremental", "HNSW"], recall_ann = [1.0, 0.9996],
+                             qps = [100.0, 500.0], build_s = [0.5, 1.0])
+            ex2 = DataFrame(geometry = ["gaussian"], method = ["hNNG-bulk"], d = [2], frac_evaluated = [0.5])
+            CSV.write(joinpath(dir, "exp1.csv"), exp1)
+            CSV.write(joinpath(dir, "exp1b.csv"), exp1)
+            CSV.write(joinpath(dir, "exp2.csv"), ex2)
+            CSV.write(joinpath(dir, "exp3.csv"), empty_exp3())
+            write_tables(dir)
+            @test occursin("HNSW (max recall attained) & 0.9996 & ", read(joinpath(dir, "tex", "tab_annbench.tex"), String))
+            @test occursin("HNSW (max recall attained) & 0.99960 & ", read(joinpath(dir, "tex", "tab_fashion.tex"), String))
+        end
     end
 
     @testset "sweet spot falls back to max recall when no ef reaches 0.99" begin
