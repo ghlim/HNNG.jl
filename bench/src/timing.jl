@@ -1,5 +1,5 @@
 # Timing protocol (spec §11) and the env.txt record.
-export check_protocol, best_of, time_queries, timed_queries, write_env
+export check_protocol, best_of, time_queries, timed_queries, write_env, git_commit
 
 """
     check_protocol()
@@ -79,6 +79,13 @@ catch
     "unknown"
 end
 
+"The HNNG.jl HEAD commit (the `hnng_commit` of env.txt), or \"unknown\" outside a git checkout."
+git_commit() = try
+    String(strip(read(`git -C $(dirname(BENCH_DIR)) rev-parse HEAD`, String)))
+catch
+    "unknown"
+end
+
 """
     write_env(path; manifest = joinpath(BENCH_DIR, "Manifest.toml")) -> path
 
@@ -99,11 +106,7 @@ function write_env(path::AbstractString; manifest::AbstractString = joinpath(BEN
     allowed = something(first_line_value("/proc/self/status", "Cpus_allowed_list"), "unknown")
     mhash = isfile(manifest) ? bytes2hex(open(sha256, manifest)) : "no-manifest"
     root = dirname(BENCH_DIR)
-    commit = try
-        strip(read(`git -C $root rev-parse HEAD`, String))
-    catch
-        "unknown"
-    end
+    commit = git_commit()
     dirty = try
         status = read(`git -C $root status --porcelain -- . ":(exclude)bench/results" ":(exclude)bench/results-smoke" ":(exclude)bench/run.log"`, String)
         string(!isempty(strip(status)))

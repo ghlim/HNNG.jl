@@ -42,10 +42,67 @@ fake_experiment(name, file, calls) = (name = name, file = file,
     end
 end
 
+@testset "runs.txt: a start and an end line per experiment that runs" begin
+    mktempdir() do out
+        calls = Symbol[]
+        fakes = [fake_experiment(:exp2, "exp2.csv", calls), fake_experiment(:exp3, "exp3.csv", calls)]
+        run_experiments(; smoke = false, outdir = out, force = false, select = nothing, experiments = fakes)
+        run_experiments(; smoke = false, outdir = out, force = false, select = nothing, experiments = fakes)  # all skipped
+        lines = readlines(joinpath(out, "runs.txt"))
+        @test [join(split(l)[1:2], " ") for l in lines] == ["start exp2", "end exp2", "start exp3", "end exp3"]
+        @test all(l -> match(r"^(start|end) exp\d \d{4}-\d\d-\d\dT\d\d:\d\d:\d\d$", l) !== nothing, lines)
+        # a failing experiment leaves its start line and no end line
+        boom = [(name = :exp1, file = "exp1.csv", run = (args...; kw...) -> error("crash"))]
+        @test_throws ErrorException run_experiments(; smoke = false, outdir = out, force = false,
+                                                    select = nothing, experiments = boom)
+        @test startswith(readlines(joinpath(out, "runs.txt"))[end], "start exp1 ")
+    end
+end
+
+@testset "record_env: env.txt on a fresh run, env-resume-<time>.txt on a resume, commit guard" begin
+    head = BenchCore.git_commit()
+    envkey(p) = match(r"^hnng_commit=(.*)$"m, read(p, String))[1]
+    resumes(out) = filter(f -> match(r"^env-resume-\d{8}T\d{6}\.txt$", f) !== nothing, readdir(out))
+    mktempdir() do out                                         # nothing there: fresh
+        @test record_env(out; smoke = false, force = false, select = nothing) == joinpath(out, "env.txt")
+        @test envkey(joinpath(out, "env.txt")) == head && isempty(resumes(out))
+    end
+    mktempdir() do out                                         # a CSV and env.txt from this commit: resume
+        write(joinpath(out, "exp2.csv"), "x\n")
+        write(joinpath(out, "env.txt"), "hnng_commit=$head\nfirst=1\n")
+        p = record_env(out; smoke = false, force = false, select = nothing)
+        @test p == joinpath(out, only(resumes(out)))
+        @test read(joinpath(out, "env.txt"), String) == "hnng_commit=$head\nfirst=1\n"   # untouched
+        @test envkey(p) == head
+    end
+    mktempdir() do out                                         # resume across a commit change: refused
+        write(joinpath(out, "exp2.csv"), "x\n")
+        write(joinpath(out, "env.txt"), "hnng_commit=0123456789abcdef\n")
+        err = try
+            record_env(out; smoke = false, force = false, select = nothing); nothing
+        catch e
+            e
+        end
+        @test err isa ErrorException && occursin("BENCH_FORCE=1", err.msg) && occursin("0123456789abcdef", err.msg)
+        @test isempty(resumes(out))
+        # BENCH_FORCE=1 starts afresh and rewrites env.txt; smoke always reruns everything
+        @test record_env(out; smoke = false, force = true, select = nothing) == joinpath(out, "env.txt")
+        @test envkey(joinpath(out, "env.txt")) == head
+        write(joinpath(out, "env.txt"), "hnng_commit=0123456789abcdef\n")
+        @test record_env(out; smoke = true, force = false, select = nothing) == joinpath(out, "env.txt")
+        # BENCH_FORCE=1 with BENCH_ONLY reruns one experiment: the others' env.txt is kept
+        write(joinpath(out, "env.txt"), "hnng_commit=0123456789abcdef\n")
+        p = record_env(out; smoke = false, force = true, select = :exp1)
+        @test p == joinpath(out, only(resumes(out)))
+        @test read(joinpath(out, "env.txt"), String) == "hnng_commit=0123456789abcdef\n"
+    end
+end
+
 @testset "run_all: tables and plots only when all four CSVs exist" begin
     mktempdir() do out
         run_all(; outdir = out, force = true, select = :exp2)
         @test isfile(joinpath(out, "exp2.csv")) && isfile(joinpath(out, "env.txt"))
+        @test [split(l)[1] for l in readlines(joinpath(out, "runs.txt"))] == ["start", "end"]
         @test !isfile(joinpath(out, "exp1.csv"))
         @test !isdir(joinpath(out, "tex")) && !isdir(joinpath(out, "fig"))
     end

@@ -2,6 +2,7 @@
 # Pinned full run: bench/run.sh. Direct: julia -t 1 --project=bench bench/run_all.jl
 isdefined(Main, :BenchCore) || include(joinpath(@__DIR__, "src", "BenchCore.jl"))
 using .BenchCore
+using Dates
 for (file, entry) in (("exp1.jl", :run_exp1), ("exp2.jl", :run_exp2), ("exp3.jl", :run_exp3),
                       ("tables.jl", :write_tables), ("plots.jl", :write_plots))
     isdefined(Main, entry) || include(joinpath(@__DIR__, file))
@@ -30,12 +31,56 @@ function bench_only()
     return Symbol(s)
 end
 
+iso_now() = Dates.format(Dates.now(), Dates.dateformat"yyyy-mm-ddTHH:MM:SS")
+
+"Appends `<what> <experiment> <ISO time>` to `outdir/runs.txt`."
+function log_run(outdir::AbstractString, what::AbstractString, name)
+    open(io -> println(io, "$what $name $(iso_now())"), joinpath(outdir, "runs.txt"), "a")
+    return nothing
+end
+
+"""
+    record_env(outdir; smoke, force, select) -> path
+
+Writes the environment record. A run that starts fresh (smoke, which reruns everything;
+`force` without `select`; or no experiment CSV in `outdir`) writes `env.txt`. Any other
+invocation resumes an earlier run and writes `env-resume-<yyyymmddTHHMMSS>.txt`, keeping
+`env.txt` as the record of the run's first invocation. A non-smoke resume whose HEAD commit
+differs from env.txt's `hnng_commit` is refused: its CSVs would mix two versions of the code.
+"""
+function record_env(outdir::AbstractString; smoke::Bool, force::Bool, select::Union{Nothing,Symbol})
+    have_csv = any(f -> isfile(joinpath(outdir, f)), RESULT_CSVS)
+    fresh = smoke || (force && select === nothing) || !have_csv
+    fresh && return write_env(joinpath(outdir, "env.txt"))
+    envtxt = joinpath(outdir, "env.txt")
+    if !force && isfile(envtxt)
+        was = something(first_line_value_eq(envtxt, "hnng_commit"), "unknown")
+        head = git_commit()
+        if was != head
+            error("resume refused: $outdir holds results of commit $was (env.txt) but HEAD is $head; " *
+                  "rerun with BENCH_FORCE=1 to start afresh, or check out $was to resume")
+        end
+    end
+    stamp = Dates.format(Dates.now(), Dates.dateformat"yyyymmddTHHMMSS")
+    return write_env(joinpath(outdir, "env-resume-$stamp.txt"))
+end
+
+"Value of the first `key=value` line of `path` whose key is `key` (`nothing` when absent)."
+function first_line_value_eq(path::AbstractString, key::AbstractString)
+    for line in eachline(path)
+        startswith(line, key * "=") && return String(strip(line[length(key)+2:end]))
+    end
+    return nothing
+end
+
 """
     run_experiments(; smoke, outdir, force, select, experiments) -> Vector{Symbol}
 
 Runs `experiments` in order and returns the names of those that ran. An experiment whose CSV
 is already in `outdir` is skipped unless `force`; smoke runs always rerun, since their
-directory is scratch. `select` (a name) restricts the run to that experiment.
+directory is scratch. `select` (a name) restricts the run to that experiment. Each experiment
+that runs appends `start <name> <time>` and, when it finishes, `end <name> <time>` to
+`outdir/runs.txt`.
 """
 function run_experiments(; smoke::Bool = is_smoke(), outdir::AbstractString = results_dir(smoke),
                          force::Bool = bench_force(), select::Union{Nothing,Symbol} = bench_only(),
@@ -48,7 +93,9 @@ function run_experiments(; smoke::Bool = is_smoke(), outdir::AbstractString = re
             continue
         end
         @info "running $(e.name)"
+        log_run(outdir, "start", e.name)
         e.run(; smoke, outdir)
+        log_run(outdir, "end", e.name)
         push!(ran, e.name)
     end
     return ran
@@ -58,7 +105,7 @@ function run_all(; smoke::Bool = is_smoke(), outdir::AbstractString = results_di
                  force::Bool = bench_force(), select::Union{Nothing,Symbol} = bench_only())
     check_protocol()
     mkpath(outdir)
-    write_env(joinpath(outdir, "env.txt"))
+    record_env(outdir; smoke, force, select)
     @info "benchmark results go to $outdir" smoke force select
     run_experiments(; smoke, outdir, force, select)
     absent = [f for f in RESULT_CSVS if !isfile(joinpath(outdir, f))]
