@@ -107,3 +107,57 @@ end
     @test ok
     @test occursin("compilation inside timed build", msg)
 end
+
+# The brute force before the final-review fix (39f7c17), kept verbatim as the reference: d×n
+# transposed gemv, copy + partialsort! for the k-th score, τ = max(1e-4, 2d·eps)·(‖q‖² + max‖x‖²),
+# Float64 re-rank. The fixed BruteBLAS must return identical (ids, dists) on every query.
+function brute_reference(X::Matrix{Float32}, q::AbstractVector{Float32}, k::Int)
+    d, n = size(X)
+    kk = min(k, n)
+    n2 = vec(sum(abs2, X; dims = 1))
+    a = n2 .- 2f0 .* (transpose(X) * q)
+    t = partialsort!(copy(a), kk)
+    τ = max(1f-4, 2f0 * d * eps(Float32)) * (sum(abs2, q) + maximum(n2; init = 0f0))
+    cand = findall(<=(t + τ), a)
+    ds = Float64[dist64(view(X, :, i), q) for i in cand]
+    p = first(sort(collect(eachindex(cand)); by = j -> (ds[j], cand[j])), kk)
+    return cand[p], ds[p]
+end
+
+@testset "brute force: n×d layout up to d = 128, single-pass top-k, same answers as before" begin
+    function same_as_reference(X, Q; ks = (1, 10))
+        h = build(BruteBLAS(), X)
+        return all(query(h, q, k) == brute_reference(X, q, k) for q in columns(Q), k in ks)
+    end
+    @testset "$geometry, n = $n, d = $d" for (geometry, n, d) in
+            (("gaussian", 300, 2), ("gaussian", 300, 8), ("blobs", 300, 8),     # the exact-method test sets
+             ("gaussian", 2000, 2), ("gaussian", 2000, 32), ("gaussian", 2000, 128), ("gaussian", 2000, 200),
+             ("blobs", 2000, 16))
+        X, Q = synthetic(geometry, n, 50, d)
+        @test same_as_reference(X, Q)
+        h = build(BruteBLAS(), X)
+        if d <= 128
+            @test h.Xt == permutedims(X)                    # gemv 'N' on the n×d copy
+        else
+            @test isempty(h.Xt)                             # d > 128 keeps the d×n transposed gemv
+        end
+    end
+    @testset "offset data (Float32 cancellation) and k ≥ n" begin
+        X = gaussian(500, 8, 11) .+ 1000f0
+        Q = gaussian(20, 8, 12) .+ 1000f0
+        @test same_as_reference(X, Q; ks = (1, 10, 499, 500, 600))
+    end
+    rx = joinpath(data_dir(), "random-xs-20-euclidean.hdf5")
+    if isfile(rx)
+        ds = load_hdf5(rx)
+        @test same_as_reference(ds.train, ds.test[:, 1:200])
+    else
+        @info "random-xs-20 not found under $(data_dir()); its brute-force identity check is skipped"
+    end
+    @testset "τ window: 4(d+3)·eps(Float32), floor 1e-4" begin
+        q = Float32[1, 2, 3]
+        @test BenchCore.brute_tau(20, q, 5f0) == max(1f-4, 4f0 * 23 * eps(Float32)) * (14f0 + 5f0)
+        @test BenchCore.brute_tau(20, q, 5f0) == 1f-4 * 19f0          # floor at small d
+        @test BenchCore.brute_tau(784, q, 5f0) == 4f0 * 787 * eps(Float32) * 19f0
+    end
+end

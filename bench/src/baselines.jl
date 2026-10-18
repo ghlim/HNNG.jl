@@ -98,39 +98,77 @@ fraction_evaluated(h::HNNGHandle, qs, k::Int) =
 # ---- brute force: Gram trick with gemv, exact Float64 re-rank -----------------------
 struct BruteBLAS <: BenchMethod end
 method_name(::BruteBLAS) = "brute-BLAS"
+"Largest d for which the brute force scores on an n×d copy (gemv 'N'); above it the d×n 'T' gemv was faster (Fashion-MNIST, d = 784)."
+const BRUTE_ROWMAJOR_MAXD = 128
 """
-Brute-force handle. It reuses the mutable buffers `s`, `a` and `buf` on every query, so it is
-not thread-safe; the timing protocol runs one query at a time.
+Brute-force handle. It reuses the mutable buffers `s`, `a` and `top` on every query, so it is
+not thread-safe; the timing protocol runs one query at a time. `Xt` is the n×d copy
+`permutedims(X)` when d <= $(BRUTE_ROWMAJOR_MAXD) (0×0 otherwise).
 """
 struct BruteHandle
     X::Matrix{Float32}
+    Xt::Matrix{Float32}     # n×d copy of X for d <= BRUTE_ROWMAJOR_MAXD, else 0×0
     n2::Vector{Float32}     # ‖x_i‖²
     maxn2::Float32
     s::Vector{Float32}      # Xᵀq
     a::Vector{Float32}      # ‖x_i‖² − 2 x_iᵀq  (= ‖x_i − q‖² − ‖q‖²)
-    buf::Vector{Float32}
+    top::Vector{Float32}    # the k smallest scores, sorted ascending
 end
 function build(::BruteBLAS, X::Matrix{Float32})
-    n = size(X, 2)
+    d, n = size(X)
     n2 = vec(sum(abs2, X; dims = 1))
-    return BruteHandle(X, n2, maximum(n2; init = 0f0), zeros(Float32, n), zeros(Float32, n), zeros(Float32, n))
+    Xt = d <= BRUTE_ROWMAJOR_MAXD ? permutedims(X) : Matrix{Float32}(undef, 0, 0)
+    return BruteHandle(X, Xt, n2, maximum(n2; init = 0f0), zeros(Float32, n), zeros(Float32, n), Float32[])
 end
+
 """
-Scores every point with one BLAS gemv. Candidates are all points whose Float32 score lies
-within τ = max(1e-4, 2·d·eps(Float32))·(‖q‖² + max‖x‖²) of the k-th score, a bound on the
-score's rounding; candidates are re-ranked with the Float64 kernel, so the answer is exact.
+    brute_tau(d, q, maxn2) -> τ
+
+Candidate window of the brute force: τ = max(1e-4, 4(d+3)·eps(Float32))·(‖q‖² + max‖x‖²).
+
+Bound. In the standard worst-case rounding model a Float32 score a_i = ‖x_i‖² − 2x_iᵀq is off by
+at most γ_d·(‖x_i‖² + 2Σ_j|x_ij q_j|) + eps·|a_i| with γ_d = d·eps/(1 − d·eps), and both terms in
+brackets are ≤ 2(‖q‖² + max‖x‖²). The k-th score and a candidate's score can both be off, so
+the window must cover twice that error, 4(γ_d + eps)(‖q‖² + max‖x‖²); 4(d+3)·eps covers it with
+a factor-2 margin for every d <= 2800 (Fashion-MNIST, d = 784, is inside the range). Beyond
+d = 2800 the window is no longer a proven bound.
+"""
+brute_tau(d::Integer, q::AbstractVector{Float32}, maxn2::Float32) =
+    max(1f-4, 4f0 * (d + 3) * eps(Float32)) * (sum(abs2, q) + maxn2)
+
+"""
+Scores every point with one BLAS gemv: on the n×d copy (gemv 'N') when d <= $(BRUTE_ROWMAJOR_MAXD),
+on the d×n data (transposed gemv) otherwise. One pass writes the scores and keeps the k
+smallest in a sorted k-slot buffer, whose last slot is the k-th score t. Candidates are all
+points whose Float32 score lies within τ = `brute_tau` of t, a proven bound on the score's
+rounding for d <= 2800; they are re-ranked with the Float64 kernel, so the answer is exact.
 """
 function query(h::BruteHandle, q::AbstractVector{Float32}, k::Int)
     X = h.X
     d, n = size(X)
     kk = min(k, n)
-    mul!(h.s, transpose(X), q)                     # BLAS sgemv
-    @inbounds for i in 1:n
-        h.a[i] = h.n2[i] - 2f0 * h.s[i]
+    if size(h.Xt, 1) == n && n > 0
+        mul!(h.s, h.Xt, q)                         # BLAS sgemv 'N' on the n×d copy
+    else
+        mul!(h.s, transpose(X), q)                 # BLAS sgemv 'T' on the d×n data
     end
-    copyto!(h.buf, h.a)
-    t = partialsort!(h.buf, kk)
-    τ = max(1f-4, 2f0 * d * eps(Float32)) * (sum(abs2, q) + h.maxn2)
+    top = h.top
+    resize!(top, kk)
+    fill!(top, Inf32)
+    @inbounds for i in 1:n
+        a = h.n2[i] - 2f0 * h.s[i]
+        h.a[i] = a
+        if kk > 0 && a < top[kk]                   # insertion into the sorted k-slot buffer
+            j = kk
+            while j > 1 && top[j-1] > a
+                top[j] = top[j-1]
+                j -= 1
+            end
+            top[j] = a
+        end
+    end
+    t = top[kk]
+    τ = brute_tau(d, q, h.maxn2)
     cand = findall(<=(t + τ), h.a)
     ds = Float64[dist64(view(X, :, i), q) for i in cand]
     p = first(sort(collect(eachindex(cand)); by = j -> (ds[j], cand[j])), kk)
