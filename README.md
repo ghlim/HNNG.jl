@@ -229,3 +229,7 @@ representative per duplicate group and would under-count recall on data with rep
 other method.
 
 The numbers are Julia measurements; parity with the C++ reference implementation is not a goal.
+
+## License
+
+MIT; see [LICENSE](LICENSE).
