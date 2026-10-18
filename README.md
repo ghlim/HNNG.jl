@@ -146,9 +146,9 @@ dijkstra_shortest_paths(g, 1, W).dists        # no new distance evaluation
 |---|---|---|---|---|---|---|
 | Exact result guaranteed | yes | no (approximate) | yes | yes | yes | yes |
 | Parameter-free | yes | no (M, efConstruction, ef) | leaf size | leaf size | base | yes |
-| Variable-size elements, any metric | yes | metric by distance function, fixed dim | fixed dim, Minkowski | fixed dim, metric | any metric | any |
+| Variable-size elements, any metric | yes | any distance | fixed dim, Minkowski | fixed dim, metric | any metric | any |
 | Online insert | yes, exact | yes | rebuild | rebuild | yes | trivial |
-| Delete without rebuild | yes, exact | mark only | rebuild | rebuild | partial | trivial |
+| Delete without rebuild | yes, exact | mark only (hnswlib) | rebuild | rebuild | yes | trivial |
 | Hierarchy of data clusters as a by-product | yes | random levels | splits, not clusters | balls, not clusters | nested covers | none |
 | Navigation along stored links | yes (NN chains, shortest paths) | approximate links | none | none | tree only | none |
 | Query cost versus intrinsic dimension | degrades (exact pruning weakens) | mild | degrades | degrades | degrades | flat |
