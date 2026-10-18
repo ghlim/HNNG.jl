@@ -53,6 +53,27 @@ const SCHEMA_EXP1 = names(empty_exp1())
 const SCHEMA_EXP2 = names(empty_exp2())
 const SCHEMA_EXP3 = names(empty_exp3())
 
+export write_csv_atomic
+
+"""
+    write_csv_atomic(path, df) -> path
+
+Writes `df` to `path * ".tmp"`, then moves it onto `path`: an interrupted run never leaves a torn
+CSV under the name that resume skips on and the tables read. A failed write removes the .tmp and
+leaves an existing `path` untouched.
+"""
+function write_csv_atomic(path::AbstractString, df)
+    tmp = path * ".tmp"
+    try
+        CSV.write(tmp, df)
+    catch
+        rm(tmp; force = true)
+        rethrow()
+    end
+    mv(tmp, path; force = true)
+    return path
+end
+
 export op_latency
 
 """

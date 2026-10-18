@@ -64,7 +64,7 @@ function run_exp1_file(file::AbstractString, name::AbstractString, smoke::Bool, 
     check_protocol()
     mkpath(outdir)
     df = bench_dataset(exp1_dataset(name, smoke); efs = smoke ? EXP1_EFS_SMOKE : EXP1_EFS)
-    CSV.write(joinpath(outdir, file), df)
+    write_csv_atomic(joinpath(outdir, file), df)
     return nothing
 end
 

@@ -170,7 +170,7 @@ function run_exp3(; smoke::Bool = is_smoke(), outdir::AbstractString = results_d
         @info "Exp.3" c.config c.n c.d
     end
     mkpath(outdir)
-    CSV.write(joinpath(outdir, "exp3.csv"), df)
+    write_csv_atomic(joinpath(outdir, "exp3.csv"), df)
     return df
 end
 

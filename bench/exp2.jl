@@ -39,7 +39,7 @@ function run_exp2(; smoke::Bool = is_smoke(), outdir::AbstractString = results_d
         @info "Exp.2" geometry d
     end
     mkpath(outdir)
-    CSV.write(joinpath(outdir, "exp2.csv"), df)
+    write_csv_atomic(joinpath(outdir, "exp2.csv"), df)
     return df
 end
 

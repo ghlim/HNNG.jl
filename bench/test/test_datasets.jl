@@ -1,5 +1,9 @@
 include(joinpath(@__DIR__, "setup.jl"))
 
+using DataFrames
+struct AtomicBoom end
+Base.print(io::IO, ::AtomicBoom) = error("boom: the CSV write failed half-way")
+
 @testset "datasets" begin
     @testset "results directories and CSV schemas" begin
         @test results_dir(true) != results_dir(false)
@@ -12,6 +16,19 @@ include(joinpath(@__DIR__, "setup.jl"))
                               "recall_ann", "frac_evaluated", "nlevels"]
         @test SCHEMA_EXP3 == ["config", "n", "d", "run", "method", "op", "seq", "latency_s",
                               "nevals", "rewired", "top_level", "note"]
+    end
+
+    @testset "write_csv_atomic: .tmp then mv, the old file survives a failed write" begin
+        mktempdir() do dir
+            p = joinpath(dir, "exp9.csv")
+            @test write_csv_atomic(p, DataFrame(a = [1, 2])) == p
+            @test read(p, String) == "a\n1\n2\n" && !isfile(p * ".tmp")
+            write_csv_atomic(p, DataFrame(a = [3]))                       # replaces an existing file
+            @test read(p, String) == "a\n3\n"
+            @test_throws ErrorException write_csv_atomic(p, DataFrame(a = [AtomicBoom()]))
+            @test read(p, String) == "a\n3\n" && !isfile(p * ".tmp")    # untouched, no stray .tmp
+            @test readdir(dir) == ["exp9.csv"]
+        end
     end
 
     @testset "gaussian: seeded, d×n Float32, prefix-stable" begin
