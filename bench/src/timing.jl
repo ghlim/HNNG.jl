@@ -61,6 +61,24 @@ function first_line_value(path::AbstractString, prefix::AbstractString)
     return nothing
 end
 
+"CPU numbers in the kernel's cpulist format (\"0-3,8,10-11\"); `nothing` gives none."
+function parse_cpu_list(s::Union{Nothing,AbstractString})
+    s === nothing && return Int[]
+    cpus = Int[]
+    for part in split(strip(s), ','; keepempty = false)
+        r = split(part, '-')
+        append!(cpus, length(r) == 1 ? [parse(Int, r[1])] : parse(Int, r[1]):parse(Int, r[2]))
+    end
+    return cpus
+end
+
+"Stripped contents of a sysfs file, or \"unknown\" when it does not exist or cannot be read."
+sysfs_value(path::AbstractString) = try
+    isfile(path) ? String(strip(read(path, String))) : "unknown"
+catch
+    "unknown"
+end
+
 """
     write_env(path; manifest = joinpath(BENCH_DIR, "Manifest.toml")) -> path
 
@@ -68,7 +86,11 @@ Records Julia version, the Manifest.toml SHA-256, CPU model, cpufreq governor (w
 sysfs file exists), allowed CPUs (shows the taskset pinning), thread counts, the HNNG.jl
 commit, whether the working tree had uncommitted changes outside `bench/results*`
 (`dirty`), whether this is a smoke run, the seeds, the versions of the benchmarked
-packages, the kernel and the date, one `key=value` per line.
+packages, the kernel and the date, one `key=value` per line. Also the measurement
+environment: `cpu_sibling` (each allowed CPU with its hyperthread siblings, `cpu:list;...`),
+`no_turbo` (intel_pstate), `epp` (energy_performance_preference of the allowed CPU, or
+`cpu:value;...` when allowed CPUs differ) and `blas_config` (`BLAS.get_config()` on one line);
+"unknown" where the sysfs file is absent.
 """
 function write_env(path::AbstractString; manifest::AbstractString = joinpath(BENCH_DIR, "Manifest.toml"))
     cpu = something(first_line_value("/proc/cpuinfo", "model name"), "unknown")
@@ -101,15 +123,28 @@ function write_env(path::AbstractString; manifest::AbstractString = joinpath(BEN
     catch
         string(Sys.KERNEL)
     end
+    cpus = parse_cpu_list(allowed == "unknown" ? nothing : allowed)
+    cpudir(c) = "/sys/devices/system/cpu/cpu$c"
+    sibling = isempty(cpus) ? "unknown" :
+        join(("$c:$(sysfs_value(cpudir(c) * "/topology/thread_siblings_list"))" for c in cpus), ";")
+    epps = [sysfs_value(cpudir(c) * "/cpufreq/energy_performance_preference") for c in cpus]
+    epp = isempty(epps) ? "unknown" :
+          allequal(epps) ? first(epps) : join(("$c:$e" for (c, e) in zip(cpus, epps)), ";")
+    no_turbo = sysfs_value("/sys/devices/system/cpu/intel_pstate/no_turbo")
+    blas_config = replace(string(BLAS.get_config()), r"\s*\n\s*" => " ")
     lines = [
         "julia_version=$(VERSION)",
         "manifest_sha256=$mhash",
         "cpu_model=$cpu",
         "governor=$governor",
         "cpus_allowed=$allowed",
+        "cpu_sibling=$sibling",
+        "no_turbo=$no_turbo",
+        "epp=$epp",
         "threads=$(Threads.nthreads())",
         "interactive_threads=$(Threads.nthreads(:interactive))",
         "blas_threads=$(BLAS.get_num_threads())",
+        "blas_config=$blas_config",
         "hnng_commit=$commit",
         "dirty=$dirty",
         "smoke=$(is_smoke())",

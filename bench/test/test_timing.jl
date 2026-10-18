@@ -75,6 +75,13 @@ end
         end
     end
 
+    @testset "parse_cpu_list: the kernel's cpulist format" begin
+        @test BenchCore.parse_cpu_list("2") == [2]
+        @test BenchCore.parse_cpu_list("0-3,8,10-11\n") == [0, 1, 2, 3, 8, 10, 11]
+        @test BenchCore.parse_cpu_list("4-7") == 4:7
+        @test BenchCore.parse_cpu_list(nothing) == Int[]
+    end
+
     @testset "env.txt records the run environment" begin
         check_protocol()
         mktempdir() do dir
@@ -83,9 +90,18 @@ end
             for key in ("julia_version=", "manifest_sha256=", "cpu_model=", "governor=",
                         "cpus_allowed=", "threads=1", "interactive_threads=0", "blas_threads=1",
                         "hnng_commit=", "date=",
-                        "dirty=", "smoke=", "seeds=", "pkg_versions=", "kernel=")
+                        "dirty=", "smoke=", "seeds=", "pkg_versions=", "kernel=",
+                        "cpu_sibling=", "no_turbo=", "epp=", "blas_config=")
                 @test occursin(key, txt)
             end
+            # one key=value per line; the BLAS configuration is flattened onto its line
+            @test all(l -> occursin('=', l), split(chomp(txt), '\n'))
+            @test match(r"^blas_config=.*\S"m, txt) !== nothing
+            @test match(r"^no_turbo=(0|1|unknown)$"m, txt) !== nothing
+            # the hyperthread siblings of every allowed CPU, as cpu:siblings
+            allowed = BenchCore.parse_cpu_list(BenchCore.first_line_value("/proc/self/status", "Cpus_allowed_list"))
+            sib = match(r"^cpu_sibling=(.*)$"m, txt)[1]
+            @test sib == "unknown" || [parse(Int, split(e, ':')[1]) for e in split(sib, ';')] == allowed
             @test occursin("julia_version=$(VERSION)", txt)
             @test match(r"manifest_sha256=[0-9a-f]{64}", txt) !== nothing
             @test occursin("smoke=true", txt)                       # the test preamble sets BENCH_SMOKE=1
