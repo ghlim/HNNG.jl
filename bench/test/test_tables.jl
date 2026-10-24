@@ -120,6 +120,7 @@ bs(s) = s * "\\\\"   # append the LaTeX row end \\ (a raw string cannot end in a
         @test has("hnswPeakQpsRandomXs", "92{,}000") && has("hnswPeakRecallRandomXs", "0.82")
         @test has("hnswExactQpsRandomXs", "54{,}000")
         @test has("hnngQpsFashion", "70.0") && has("hnngBulkQpsFashion", "66.0") && has("bruteQpsFashion", "59.7")
+        @test has("hnngOverBruteFashion", "1.17") && has("hnngBulkOverBruteFashion", "1.11")
         @test has("hnswMaxRecallFashion", "0.99996") && has("hnswMaxRecallQpsFashion", "635")
         @test has("hnswSweetRecallFashion", "0.994") && has("hnswSweetQpsFashion", "5{,}245")
         @test has("hnngIncBuildFashion", "552") && has("hnngBulkBuildFashion", "43.6")
@@ -128,7 +129,7 @@ bs(s) = s * "\\\\"   # append the LaTeX row end \\ (a raw string cannot end in a
         @test has("insertMsLargest", "5.86") && has("deleteMsLargest", "8.59")
         @test has("rebuildSLargest", "30.8") && has("speedupLargest", "5{,}256")
         @test has("speedupBulkLargest", "392") && has("bulkRebuildSLargest", "2.30")
-        @test count("\\newcommand", tex) == 30
+        @test count("\\newcommand", tex) == 32
         for name in ("rhoDtwo", "rhoDeight", "rhoDsixteen", "rhoDthirtytwo", "rewireMean", "rewireMax",
                      "hnngQpsRandomXs", "bruteQpsRandomXs", "hnngBulkBuildFashion", "hnngIncBuildFashion",
                      "insertMsLargest", "rebuildSLargest", "bulkRebuildSLargest")   # used by the manuscript
