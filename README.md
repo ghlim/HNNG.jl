@@ -8,6 +8,14 @@ representatives form the next level until one cluster remains. Search is exact
 bucket size), elements can be any Julia object under any distance, and insert and
 delete are exact and incremental.
 
+Search is best-first branch-and-bound over the clusters: a cluster is skipped when
+`d(q, rep) − radius` exceeds the k-th distance found so far. On vector data with
+`d ≥ 64` (Euclidean, SqEuclidean, CosineDist) it also skips single members, M-tree
+style: member `m` and everything below it are skipped when
+`β(q, m) = |d(q, rep) − d(rep, m)| − σ(m)` exceeds the k-th distance, where `σ(m)` is
+the member's reach (0 at level 0, its child cluster's radius above). Both distances
+in `β` are already known, so the test costs no evaluation and changes no result.
+
 This package ports the C++ reference implementation `hnnglib` (header `hnnalg.h`)
 with the divergences listed in its design spec (§12).
 

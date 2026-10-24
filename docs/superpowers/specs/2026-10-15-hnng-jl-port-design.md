@@ -397,6 +397,20 @@ One exact engine: best-first branch-and-bound.
   Otherwise evaluate every member `m`, offer `(M(q, m), m)` to the result set,
   and when the cluster is above level 0 push `child(m)` with `LB =
   max(0, M(q, m) - radius(child(m)))`.
+- Parent-distance filter (M-tree style). When cluster `C` (representative `r`)
+  is expanded with `k` results held, member `m` and its whole subtree are
+  skipped (no evaluation, no offer, no child push) when
+  `beta(q, m) = |M(q, r) - repdist(m)| - sigma(m)` exceeds the k-th distance
+  (strictly, with the guard). `sigma(m)` is the member's reach: 0 at level 0,
+  `radius(child(m))` above when `rep(child(m)) == m` (always at rest; other
+  members are not tested). `M(q, r)` is memoised when `C` is pushed and
+  `repdist` is stored, so the test evaluates nothing; `LB(C)` is its smallest
+  one-sided case. Results are bitwise identical with and without it, and it
+  never adds an evaluation. Gate: VectorStore, `dim >= 64` (internal constant,
+  not a parameter), `Euclidean`/`SqEuclidean`/`CosineDist`, metric index; below
+  that dimension the check costs about what it saves, and ObjectStore and
+  `UserMetric` are unmeasured. `knn`, `knn_counted`, `knn_batch` and
+  `knn_stored` use it; `knn_levelsync` and the build do not.
 - Non-metric index: `LB = 0` everywhere; the engine visits every cluster and
   returns the exact answer.
 - Output sorted by `(distance, id)`.
