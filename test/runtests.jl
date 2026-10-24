@@ -6,6 +6,7 @@ using Test, HNNG
     include("invariants.jl")
     include("search.jl")
     include("knn_stored.jl")
+    include("pf_filter.jl")
     include("updates.jl")
     include("objects.jl")
     include("order.jl")
