@@ -126,8 +126,10 @@ neighbours and are returned. Fewer than `k` other live elements: all of them; no
 
 `k == 1` reads the level-0 outlink and its stored distance and evaluates nothing. For
 `k > 1` the search starts with the distances the index already stores for `id` (to its
-outlinks and inlinkers) in its memo, so it never evaluates more than
-`knn(idx, element(idx, id), k + 1)`; a non-metric index runs without those seeds.
+outlinks and inlinkers) in its memo, so under `Euclidean` or `SqEuclidean` it never
+evaluates more than `knn(idx, element(idx, id), k + 1)` (under `CosineDist`, `knn`
+normalises its query again, so the two searches can differ slightly); a non-metric
+index runs without those seeds.
 Holds the index lock, like `knn`.
 """
 knn_stored(idx::HNNGIndex, id::Integer, k::Integer) = @_locked idx _knn_stored(idx, id, k)
