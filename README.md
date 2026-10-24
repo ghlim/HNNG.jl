@@ -55,7 +55,7 @@ A failed `bulk_add!` leaves the index empty.
 `knn_batch(idx, Q, k)` answers the columns of `Q` at once. With `threads=true` it
 spreads them over `Threads.nthreads()` tasks, which needs a thread-safe `UserMetric`,
 and it does not update the distance-evaluation counter. Each index has a lock that
-`add!`, `delete!`, `bulk_add!`, `knn`, `knn_batch`, `verify` and `HNNG.save` hold for
+`add!`, `delete!`, `bulk_add!`, `knn`, `knn_stored`, `knn_batch`, `verify` and `HNNG.save` hold for
 their whole duration, so calls on one index from several threads (for example `knn`
 inside `Threads.@threads`) are serialized: correct, not parallel. Use
 `knn_batch(idx, Q, k; threads=true)` for parallel queries. The navigation functions
@@ -83,6 +83,12 @@ gets) the index is exact but unpruned. Declaring a non-metric distance as a metr
 the heuristic mode of the 2015 ROS system: faster, and it may miss neighbours.
 
 ## Navigation without distance evaluations
+
+`knn_stored(idx, id, k)` is `knn` for an element already in the index: its exact `k`
+nearest other live elements (same order, units and tie rule as `knn`, `id` itself
+left out; copies of `id` at distance 0 are returned like any other neighbour). It
+starts from the distances the index already stores for `id`, and `k = 1` is free: it
+returns the level-0 outlink and its stored distance without evaluating anything.
 
 `outlink`, `outlink_distance`, `inlinks`, `cluster`, `members`, `representative`,
 `radius`, `parent`, `children`, `path_to_root`, `leaves`, `root` and `newick` read

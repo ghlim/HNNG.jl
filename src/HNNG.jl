@@ -6,7 +6,7 @@ using Serialization: serialize, deserialize
 using LinearAlgebra: mul!
 
 export HNNGIndex, UserMetric, Euclidean, SqEuclidean, CosineDist
-export is_metric, nlevels, element, verify, add!, knn, knn_batch, stats, reset_evals!, bulk_add!
+export is_metric, nlevels, element, verify, add!, knn, knn_stored, knn_batch, stats, reset_evals!, bulk_add!
 export outlink, outlink_distance, inlinks, cluster, members, representative, radius,
        children, path_to_root, leaves, root, newick, level_graph
 
@@ -31,6 +31,8 @@ if ccall(:jl_generating_output, Cint, ()) == 1
             add!(idx, X)
             add!(idx, q .+ one(T))
             knn(idx, q, 3)
+            knn_stored(idx, 5, 1)
+            knn_stored(idx, 5, 3)
             knn_levelsync(idx, q, 3)
             knn_batch(idx, X[:, 1:2], 2)
             delete!(idx, 3)

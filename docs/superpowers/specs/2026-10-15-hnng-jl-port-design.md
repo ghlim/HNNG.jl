@@ -110,6 +110,8 @@ add!(idx, objs::AbstractVector{<:E}) -> UnitRange{Int} # always a batch: add!(id
 delete!(idx, id::Int)               -> idx
 
 knn(idx, q, k::Int)                 -> (ids::Vector{Int}, dists::Vector{Float64})
+knn_stored(idx, id, k::Int)         -> (ids::Vector{Int}, dists::Vector{Float64})
+                                    # exact k-NN of the stored element id, id excluded; k == 1 is its outlink, no evaluation
 knn_batch(idx, Q, k; threads=false) -> (ids::Matrix{Int}, dists::Matrix{Float64})
                                     # Q: matrix columns (VectorStore) or Vector{E} (ObjectStore)
 
@@ -124,7 +126,7 @@ save(path, idx); load(path; metric=nothing)   # called as HNNG.save / HNNG.load;
 ```
 
 Each index has a `ReentrantLock` that `add!`, `delete!`, `bulk_add!`, `knn`,
-`knn_counted`, `knn_levelsync`, `knn_batch`, `verify`, `save`, `stats` and
+`knn_stored`, `knn_counted`, `knn_levelsync`, `knn_batch`, `verify`, `save`, `stats` and
 `reset_evals!` hold for their whole duration: calls on one index are serialized
 (correct, not parallel), and `knn_batch(...; threads=true)` is the way to run parallel
 queries (its calling task holds the lock while the worker tasks run; a `UserMetric`

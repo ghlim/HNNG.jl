@@ -22,9 +22,12 @@ Best-first engine in internal units. Frontier: min-heap of clusters keyed by the
 guarded lower bound; results: max-heap of at most `k` `(distance, id)`. Stops when
 `k` results are held and the smallest bound is strictly above the k-th distance.
 Distances are memoised for the query; a representative is offered once.
+`seed != 0` names the stored element `q` is (see `_seed!`); `0` for an ordinary query,
+which costs one branch per call.
 """
-function _knn!(memo::DistMemo, idx::HNNGIndex, q, k::Int)
+function _knn!(memo::DistMemo, idx::HNNGIndex, q, k::Int, seed::Int=0)
     _begin!(memo, _ntotal(idx))
+    seed == 0 || _seed!(memo, idx, seed)
     isempty(idx.levels) && return Int[], Float64[]
     res, front = memo.res, memo.front
     met = idx.is_metric
@@ -56,6 +59,36 @@ function _knn!(memo::DistMemo, idx::HNNGIndex, q, k::Int)
     _sorted_results(res)
 end
 
+"""
+    _seed!(memo, idx, id)
+
+Pre-fill the pass memo for a query that is the stored element `id` with the distances
+the index already holds: `id` itself (0), and at every level `id` reaches, its outlink
+and each of its inlinkers (the stored outlink distances, by symmetry). Only `seen`/`val`
+are set, never `mark`, so a seeded element is still offered and expanded like any
+other; nothing is counted. A no-op unless the metric is a metric, since the seeds
+assume `d(a, b) == d(b, a)` with `d(id, id) == 0`.
+"""
+function _seed!(memo::DistMemo, idx::HNNGIndex, id::Int)
+    idx.is_metric || return memo
+    ep = memo.epoch
+    memo.seen[id] = ep
+    memo.val[id] = 0.0
+    for lv in idx.levels
+        lv.present[id] || continue
+        o = lv.outlink[id]
+        if o != 0
+            memo.seen[o] = ep
+            memo.val[o] = lv.outdist[id]
+        end
+        for x in lv.inlinks[id]
+            memo.seen[x] = ep
+            memo.val[x] = lv.outdist[x]
+        end
+    end
+    memo
+end
+
 _check_k(k::Integer) = k >= 1 || throw(ArgumentError("k must be at least 1, got $k"))
 
 """
@@ -78,6 +111,42 @@ knn(idx::HNNGIndex, q, k::Integer) = @_locked idx _knn(idx, q, k)
     _check_k(k)
     ids, d = _knn!(idx.memo, idx, _prepare(idx, q), Int(k))
     _flush!(idx)
+    ids, _to_user.(Ref(idx), d)
+end
+
+"""
+    knn_stored(idx, id, k) -> (ids::Vector{Int}, dists::Vector{Float64})
+
+Exact `k` nearest live elements of the stored element `id`, `id` itself excluded:
+ascending distance, ties by ascending id, distances in the metric's own units, as
+`knn` returns them. Other elements identical to `id` (distance 0) are ordinary
+neighbours and are returned. Fewer than `k` other live elements: all of them; none
+(`id` is the only live element): two empty vectors. An unknown or deleted `id`, or
+`k < 1`, throws `ArgumentError`. Counts its evaluations in `nevals`.
+
+`k == 1` reads the level-0 outlink and its stored distance and evaluates nothing. For
+`k > 1` the search starts with the distances the index already stores for `id` (to its
+outlinks and inlinkers) in its memo, so it never evaluates more than
+`knn(idx, element(idx, id), k + 1)`; a non-metric index runs without those seeds.
+Holds the index lock, like `knn`.
+"""
+knn_stored(idx::HNNGIndex, id::Integer, k::Integer) = @_locked idx _knn_stored(idx, id, k)
+
+@noinline function _knn_stored(idx::HNNGIndex, id::Integer, k::Integer)
+    i = _check_live(idx, id)
+    _check_k(k)
+    if k == 1
+        o = idx.levels[1].outlink[i]
+        return o == 0 ? (Int[], Float64[]) : ([o], [_to_user(idx, idx.levels[1].outdist[i])])
+    end
+    # The stored point is already prepared (unit length under CosineDist): no _prepare.
+    ids, d = _knn!(idx.memo, idx, _point(idx.store, i), Int(k) + 1, i)
+    _flush!(idx)
+    # `i` is among the k+1 nearest unless k+1 or more duplicates with smaller ids precede
+    # it (or a non-metric d(i, i) > 0 pushes it out); then all k+1 are others: drop the last.
+    p = findfirst(==(i), ids)
+    deleteat!(ids, p === nothing ? length(ids) : p)
+    deleteat!(d, p === nothing ? length(d) : p)
     ids, _to_user.(Ref(idx), d)
 end
 
