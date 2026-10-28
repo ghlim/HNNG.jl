@@ -129,11 +129,46 @@ bs(s) = s * "\\\\"   # append the LaTeX row end \\ (a raw string cannot end in a
         @test has("insertMsLargest", "5.86") && has("deleteMsLargest", "8.59")
         @test has("rebuildSLargest", "30.8") && has("speedupLargest", "5{,}256")
         @test has("speedupBulkLargest", "392") && has("bulkRebuildSLargest", "2.30")
-        @test count("\\newcommand", tex) == 32
+        # one sample per op: every quantile is that sample
+        @test has("insertPninetyfiveMsLargest", "5.86") && has("insertPninetynineMsLargest", "5.86")
+        @test has("deletePninetyfiveMsLargest", "8.59") && has("deletePninetynineMsLargest", "8.59")
+        @test has("tailOpsLargest", "1")
+        @test count("\\newcommand", tex) == 37
         for name in ("rhoDtwo", "rhoDeight", "rhoDsixteen", "rhoDthirtytwo", "rewireMean", "rewireMax",
                      "hnngQpsRandomXs", "bruteQpsRandomXs", "hnngBulkBuildFashion", "hnngIncBuildFashion",
-                     "insertMsLargest", "rebuildSLargest", "bulkRebuildSLargest")   # used by the manuscript
+                     "insertMsLargest", "rebuildSLargest", "bulkRebuildSLargest",
+                     "insertPninetyfiveMsLargest", "insertPninetynineMsLargest", "deletePninetyfiveMsLargest",
+                     "deletePninetynineMsLargest", "tailOpsLargest")   # used by the manuscript
             @test occursin("\\newcommand{\\$name}{", tex)
         end
+    end
+
+    @testset "Exp.3 tails: pooled over runs, largest configuration only, type-7 interpolation" begin
+        exp3 = empty_exp3()
+        row(n, d, run, op, seq, t) = push!(exp3, (config = "table", n = n, d = d, run = run, method = "hNNG",
+            op = op, seq = seq, latency_s = t, nevals = 1, rewired = 1, top_level = 1, note = ""))
+        for (n, d) in ((8000, 16), (32000, 128)), op in ("rebuild", "rebuild-bulk")
+            row(n, d, 1, op, 1, 1.0)
+        end
+        # largest config: insert 1..10 ms split over runs 1 and 2; delete 2..20 ms over runs 1 and 2
+        for k in 1:10
+            row(32000, 128, k <= 5 ? 1 : 2, "insert", k, k / 1000)
+            row(32000, 128, k <= 5 ? 1 : 2, "delete", k, 2k / 1000)
+        end
+        no1 = DataFrame(method = String[], recall_ann = Float64[], qps = Float64[], build_s = Float64[])
+        no2 = DataFrame(geometry = String[], method = String[], d = Int[], frac_evaluated = Float64[])
+        row(8000, 16, 1, "insert", 1, 1.0)        # smaller config: a huge value that must not leak in
+        row(8000, 16, 1, "delete", 1, 1.0)
+        @test pooled_ms(exp3, "insert", 32000, 128) == collect(1.0:10.0)
+        tex = macros_tex(no1, no1, no2, exp3)
+        has(name, val) = occursin("\\newcommand{\\$name}{$val}\n", tex)
+        @test has("insertPninetyfiveMsLargest", "9.55") && has("insertPninetynineMsLargest", "9.91")
+        @test has("deletePninetyfiveMsLargest", "19.10") && has("deletePninetynineMsLargest", "19.82")
+        @test has("tailOpsLargest", "10")
+        push!(exp3, (config = "table", n = 32000, d = 128, run = 2, method = "hNNG", op = "delete", seq = 11,
+                     latency_s = 0.001, nevals = 1, rewired = 1, top_level = 1, note = ""))
+        tex = macros_tex(no1, no1, no2, exp3)
+        @test occursin("\\newcommand{\\tailOpsLargest}{n/a}\n", tex)   # unequal insert/delete pools
+        @test tail_ms(Float64[], 0.95) == "n/a"
     end
 end

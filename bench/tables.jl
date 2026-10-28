@@ -87,6 +87,16 @@ function ops_summary(exp3::AbstractDataFrame)
                      rebuild_s = reb.latency_s, rebuild_bulk_s = bulk.latency_s)
 end
 
+"Per-operation latencies in ms of one hNNG table op at (n, d), pooled over every run."
+function pooled_ms(exp3::AbstractDataFrame, op::AbstractString, n::Integer, d::Integer)
+    sel = exp3[(exp3.config .== "table") .& (exp3.method .== "hNNG") .& (exp3.op .== op) .&
+               (exp3.n .== n) .& (exp3.d .== d), :]
+    return 1000 .* collect(Float64, skipmissing(sel.latency_s))
+end
+# Statistics.quantile's default (Hyndman-Fan type 7): linear interpolation between ordered
+# observations, the same as Python's statistics.quantiles(method="inclusive").
+tail_ms(v::AbstractVector, p::Real) = isempty(v) ? "n/a" : fmt_fixed(quantile(v, p), 2)
+
 function ops_tex(exp3::AbstractDataFrame)
     lines = String["\\begin{tabular}{lccc}", "\\hline",
                    "\$n\$ (\$d\$) & insert/op & delete/op & rebuild/op \\;(speedup)" * ROW_END, "\\hline"]
@@ -159,6 +169,15 @@ function macros_tex(exp1, exp1b, exp2, exp3)
     push!(m, "bulkRebuildSLargest" => or_na(r -> fmt_sig3(r.rebuild_bulk_s), largest))
     push!(m, "speedupLargest" => or_na(r -> fmt_int(r.rebuild_s / r.insert_s), largest))
     push!(m, "speedupBulkLargest" => or_na(r -> fmt_int(r.rebuild_bulk_s / r.insert_s), largest))
+    # Exp.3 tails at the largest configuration: pooled empirical p95/p99 over all runs
+    ins = largest === nothing ? Float64[] : pooled_ms(exp3, "insert", largest.n, largest.d)
+    del = largest === nothing ? Float64[] : pooled_ms(exp3, "delete", largest.n, largest.d)
+    push!(m, "insertPninetyfiveMsLargest" => tail_ms(ins, 0.95))
+    push!(m, "insertPninetynineMsLargest" => tail_ms(ins, 0.99))
+    push!(m, "deletePninetyfiveMsLargest" => tail_ms(del, 0.95))
+    push!(m, "deletePninetynineMsLargest" => tail_ms(del, 0.99))
+    # one count for both summaries; n/a flags insert and delete pools of different sizes
+    push!(m, "tailOpsLargest" => (isempty(ins) || length(ins) != length(del)) ? "n/a" : fmt_int(length(ins)))
     return join((macro_line(k, v) for (k, v) in m), "\n") * "\n"
 end
 
